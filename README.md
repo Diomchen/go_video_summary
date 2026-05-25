@@ -10,6 +10,16 @@
 6. 总结结果可自动导入 Notion、Obsidian、IMA
 7. 总结失败后可单独重试，不必重新跑 Whisper
 
+## 运行展示
+![](https://cdn.jsdelivr.net/gh/Diomchen/pic2.0@main/img/20260525181031319.png)
+
+![](https://cdn.jsdelivr.net/gh/Diomchen/pic2.0@main/img/20260525181215949.png)
+
+![](https://cdn.jsdelivr.net/gh/Diomchen/pic2.0@main/img/20260525181307799.png)
+
+![](https://cdn.jsdelivr.net/gh/Diomchen/pic2.0@main/img/20260525181331251.png)
+
+
 ## 当前能力
 
 - 本地文件任务与 B 站链接任务共用同一队列
