@@ -1,0 +1,850 @@
+const rootEl = document.documentElement;
+const bannerStageEl = document.getElementById("banner-stage");
+const tasksEl = document.getElementById("tasks");
+const healthEl = document.getElementById("health");
+const taskStatsEl = document.getElementById("task-stats");
+const taskSearchEl = document.getElementById("task-search");
+const taskResultsInfoEl = document.getElementById("task-results-info");
+const themeToggleEl = document.getElementById("theme-toggle");
+
+const tasks = new Map();
+const expandedTaskIds = new Set();
+const viewOrder = ["status", "submit", "tasks", "api"];
+
+const THEME_KEY = "whisper-console-theme";
+
+let healthState = null;
+let currentFilter = "all";
+let currentSearch = "";
+let currentView = "status";
+
+async function fetchJSON(url, options) {
+  const resp = await fetch(url, options);
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error(data.error || "Request failed");
+  }
+  return data;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }[char]));
+}
+
+function formatDurationMs(value) {
+  const ms = Number(value || 0);
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return "";
+  }
+  if (ms < 1000) {
+    return `${Math.round(ms)} ms`;
+  }
+
+  const seconds = ms / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(seconds >= 10 ? 1 : 2)} s`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainSeconds = seconds % 60;
+  return `${minutes}m ${remainSeconds.toFixed(remainSeconds >= 10 ? 0 : 1)}s`;
+}
+
+function platformLabel(name) {
+  return ({ notion: "Notion", obsidian: "Obsidian", ima: "IMA" })[name] || name;
+}
+
+function taskStatusLabel(status) {
+  return {
+    queued: "排队中",
+    running: "进行中",
+    completed: "已完成",
+    failed: "失败"
+  }[status] || status;
+}
+
+function modeLabel(mode) {
+  return {
+    file: "文件任务",
+    url: "B 站链接"
+  }[mode] || mode || "任务";
+}
+
+function availablePlatformNames() {
+  const platforms = (healthState && healthState.exportPlatforms) || {};
+  return ["notion", "obsidian", "ima"].filter((name) => Boolean(platforms[name]));
+}
+
+function selectedExportTargets(form) {
+  return Array.from(form.querySelectorAll('input[name="exportTarget"]:checked')).map((input) => input.value);
+}
+
+function renderExportOptions(containerId) {
+  const container = document.getElementById(containerId);
+  const platforms = (healthState && healthState.exportPlatforms) || {};
+  const names = ["notion", "obsidian", "ima"];
+
+  container.innerHTML = names.map((name) => {
+    const enabled = Boolean(platforms[name]);
+    return `
+      <label class="export-check ${enabled ? "" : "disabled"}">
+        <input name="exportTarget" type="checkbox" value="${name}" ${enabled ? "" : "disabled"}>
+        <span>
+          <strong>${platformLabel(name)}</strong>
+          <small>${enabled ? "已启用" : "未配置"}</small>
+        </span>
+      </label>
+    `;
+  }).join("");
+}
+
+function applyTheme(theme) {
+  rootEl.setAttribute("data-theme", theme);
+  window.localStorage.setItem(THEME_KEY, theme);
+  themeToggleEl.textContent = theme === "dark" ? "切换浅色" : "切换深色";
+}
+
+function initializeTheme() {
+  const stored = window.localStorage.getItem(THEME_KEY);
+  const preferred = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+  applyTheme(stored || preferred);
+}
+
+function panelFor(view) {
+  return document.querySelector(`.banner-panel[data-panel="${view}"]`);
+}
+
+function updateStageHeight() {
+  const activePanel = panelFor(currentView);
+  if (!activePanel) {
+    return;
+  }
+
+  const scrollBody = activePanel.querySelector(".banner-panel-scroll");
+  const targetHeight = scrollBody ? scrollBody.scrollHeight : activePanel.scrollHeight;
+  bannerStageEl.style.height = `${Math.max(targetHeight, 0)}px`;
+}
+
+function setView(view, instant = false) {
+  if (view === currentView && !instant) {
+    return;
+  }
+
+  const previousView = currentView;
+  const previousPanel = panelFor(previousView);
+  const nextPanel = panelFor(view);
+  currentView = view;
+
+  document.querySelectorAll(".view-tab").forEach((button) => {
+    button.classList.toggle("active", button.getAttribute("data-view") === view);
+  });
+
+  if (!nextPanel) {
+    return;
+  }
+
+  const movingForward = viewOrder.indexOf(view) >= viewOrder.indexOf(previousView);
+
+  if (previousPanel && previousPanel !== nextPanel && !instant) {
+    previousPanel.classList.remove("active");
+    previousPanel.classList.toggle("to-left", movingForward);
+    nextPanel.classList.remove("to-left");
+    nextPanel.classList.add("active");
+    window.setTimeout(() => previousPanel.classList.remove("to-left"), 340);
+  } else {
+    document.querySelectorAll(".banner-panel").forEach((panel) => {
+      panel.classList.toggle("active", panel === nextPanel);
+      panel.classList.remove("to-left");
+    });
+  }
+
+  window.requestAnimationFrame(updateStageHeight);
+}
+
+function setSource(source) {
+  document.querySelectorAll(".sub-tab").forEach((button) => {
+    button.classList.toggle("active", button.getAttribute("data-source") === source);
+  });
+
+  document.querySelectorAll(".source-panel").forEach((panel) => {
+    panel.classList.toggle("active", panel.getAttribute("data-source-panel") === source);
+  });
+
+  if (currentView === "submit") {
+    window.requestAnimationFrame(updateStageHeight);
+  }
+}
+
+function shouldAutoExpand(task) {
+  return task.status === "running" || task.status === "failed" || Boolean(task.error);
+}
+
+function upsertTask(task) {
+  const existed = tasks.has(task.id);
+  tasks.set(task.id, task);
+  if (!existed && shouldAutoExpand(task)) {
+    expandedTaskIds.add(task.id);
+  }
+}
+
+function matchesSearch(task, query) {
+  if (!query) {
+    return true;
+  }
+
+  const text = [
+    task.id,
+    task.name,
+    task.status,
+    task.mode,
+    task.originalFileName,
+    task.sourceUrl,
+    task.stage
+  ].join(" ").toLowerCase();
+
+  return text.includes(query);
+}
+
+function filteredTasks() {
+  const query = currentSearch.trim().toLowerCase();
+  return Array.from(tasks.values())
+    .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))
+    .filter((task) => currentFilter === "all" || task.status === currentFilter)
+    .filter((task) => matchesSearch(task, query));
+}
+
+function renderHealth() {
+  if (!healthState) {
+    healthEl.innerHTML = '<p class="empty">正在加载系统状态...</p>';
+    return;
+  }
+
+  const whisperMode = healthState.whisperBackend === "local"
+    ? `本地 (${healthState.whisperLocalBin || "whisper"})`
+    : `OpenAI (${healthState.whisper || ""})`;
+
+  const items = [
+    ["HTTP", healthState.http || "-"],
+    ["Whisper", whisperMode],
+    ["模型", healthState.whisperLocalModel || "未配置"],
+    ["GPU", healthState.whisperLocalNoGPU ? "禁用" : "启用"],
+    ["任务并发", String(healthState.taskWorkers || 0)],
+    ["自动保存", healthState.autoSaveResults ? "开启" : "关闭"],
+    ["输出目录", healthState.outputDir || "未配置"],
+    ["导出平台", availablePlatformNames().map(platformLabel).join(" / ") || "未配置"]
+  ];
+
+  healthEl.innerHTML = items.map(([label, value]) => `
+    <article class="status-item">
+      <span class="status-label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </article>
+  `).join("");
+}
+
+function renderTaskStats() {
+  const list = Array.from(tasks.values());
+  const total = list.length;
+  const running = list.filter((task) => task.status === "running").length;
+  const queued = list.filter((task) => task.status === "queued").length;
+  const summaries = list.filter((task) => task.summary).length;
+
+  taskStatsEl.innerHTML = [
+    ["总任务数", total],
+    ["进行中", running],
+    ["排队中", queued],
+    ["已有总结", summaries]
+  ].map(([label, value]) => `
+    <article class="metric-card">
+      <span class="metric-label">${escapeHtml(label)}</span>
+      <strong class="metric-value">${escapeHtml(value)}</strong>
+    </article>
+  `).join("");
+}
+
+function renderSavedFiles(task) {
+  if (!task.savedFiles || !task.savedFiles.length) {
+    return "";
+  }
+
+  const items = task.savedFiles.map((file) => `<li>${escapeHtml(file)}</li>`).join("");
+  return `
+    <details class="detail-card">
+      <summary>已保存文件</summary>
+      <div class="detail-body">
+        <ul class="saved-files">${items}</ul>
+      </div>
+    </details>
+  `;
+}
+
+function renderTimingMetrics(task) {
+  const metrics = task.metrics;
+  if (!metrics) {
+    return "";
+  }
+
+  const items = [
+    ["Pre-LLM", formatDurationMs(metrics.preLlmProcessingDurationMs)],
+    ["Translate", formatDurationMs(metrics.translationDurationMs)],
+    ["Summary", formatDurationMs(metrics.summaryDurationMs)],
+    ["Task Total", formatDurationMs(metrics.totalTaskDurationMs)]
+  ].filter(([, value]) => Boolean(value));
+
+  if (!items.length) {
+    return "";
+  }
+
+  return `
+    <details class="detail-card" open>
+      <summary>Timing Metrics</summary>
+      <div class="detail-body">
+        <ul class="exports-list">
+          ${items.map(([label, value]) => `<li><strong>${escapeHtml(label)}</strong>: ${escapeHtml(value)}</li>`).join("")}
+        </ul>
+      </div>
+    </details>
+  `;
+}
+
+function renderExportActions(task, selected) {
+  if (!task.summary || !selected.length) {
+    return "";
+  }
+
+  return `
+    <div class="task-actions">
+      ${selected.map((name) => `
+        <button class="ghost-btn" data-action="retry-export" data-task-id="${escapeHtml(task.id)}" data-export-target="${escapeHtml(name)}">
+          重试导出到 ${escapeHtml(platformLabel(name))}
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderExports(task) {
+  const selected = (task.exportTargets && task.exportTargets.length)
+    ? task.exportTargets
+    : (task.summary ? availablePlatformNames() : []);
+
+  if (!selected.length && (!task.exports || !task.exports.length)) {
+    return "";
+  }
+
+  const resultMap = new Map((task.exports || []).map((item) => [item.name, item]));
+  const items = selected.map((name) => {
+    const item = resultMap.get(name) || { name, status: "pending" };
+    const extra = item.target
+      ? ` - ${escapeHtml(item.target)}`
+      : item.error
+        ? ` - ${escapeHtml(item.error)}`
+        : "";
+
+    return `<li><strong>${escapeHtml(platformLabel(name))}</strong>：${escapeHtml(item.status)}${extra}</li>`;
+  }).join("");
+
+  return `
+    ${renderExportActions(task, selected)}
+    <details class="detail-card" open>
+      <summary>导出结果</summary>
+      <div class="detail-body">
+        <ul class="exports-list">${items}</ul>
+      </div>
+    </details>
+  `;
+}
+
+function taskSummaryActions(task) {
+  const actions = [];
+
+  if (task.transcript && !task.summary) {
+    actions.push(`
+      <button class="ghost-btn" data-action="generate-summary" data-task-id="${escapeHtml(task.id)}">
+        生成总结
+      </button>
+    `);
+  }
+
+  if (task.summaryError && !task.summary) {
+    actions.push(`
+      <button class="ghost-btn" data-action="retry-summary" data-task-id="${escapeHtml(task.id)}">
+        重试总结
+      </button>
+    `);
+  }
+
+  return actions.join("");
+}
+
+function renderTaskDetails(task) {
+  const details = [];
+
+  if (task.transcript) {
+    details.push(`
+      <details class="detail-card">
+        <summary>转写文本</summary>
+        <div class="detail-body"><pre>${escapeHtml(task.transcript)}</pre></div>
+      </details>
+    `);
+  }
+
+  if (task.translatedText) {
+    details.push(`
+      <details class="detail-card">
+        <summary>翻译文本</summary>
+        <div class="detail-body"><pre>${escapeHtml(task.translatedText)}</pre></div>
+      </details>
+    `);
+  }
+
+  if (task.summary) {
+    details.push(`
+      <details class="detail-card" open>
+        <summary>总结 Markdown</summary>
+        <div class="detail-body"><pre>${escapeHtml(task.summary)}</pre></div>
+      </details>
+    `);
+  }
+
+  return details.join("");
+}
+
+function renderSegments(task) {
+  const segs = (task.segments || []).slice(-3).reverse().map((seg) => `
+    <article class="segment">
+      <div class="segment-head">${escapeHtml(seg.start || "")}${seg.end ? ` - ${escapeHtml(seg.end)}` : ""}</div>
+      <div class="segment-body">${escapeHtml(seg.text)}</div>
+      ${seg.translated ? `<div class="translated">${escapeHtml(seg.translated)}</div>` : ""}
+    </article>
+  `).join("");
+
+  return segs || '<p class="empty">还没有可展示的最新分段...</p>';
+}
+
+function renderMetaLines(task) {
+  const lines = [];
+
+  if (task.stage) {
+    lines.push(`<div class="meta-line">阶段：${escapeHtml(task.stage)}</div>`);
+  }
+
+  if (task.totalChunks) {
+    lines.push(`<div class="meta-line">断点进度：${escapeHtml(task.completedChunks || 0)} / ${escapeHtml(task.totalChunks)}</div>`);
+  }
+
+  if (task.exportTargets && task.exportTargets.length) {
+    lines.push(`<div class="meta-line">导出目标：${escapeHtml(task.exportTargets.map(platformLabel).join(" / "))}</div>`);
+  }
+
+  if (task.sourceUrl) {
+    lines.push(`
+      <div class="meta-line">
+        来源链接：<a href="${escapeHtml(task.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(task.sourceUrl)}</a>
+      </div>
+    `);
+  }
+
+  if (task.originalFileName) {
+    lines.push(`<div class="meta-line">原始文件：${escapeHtml(task.originalFileName)}</div>`);
+  }
+
+  return lines.join("");
+}
+
+function compactMetaItems(task) {
+  return [
+    modeLabel(task.mode),
+    task.originalFileName,
+    task.sourceUrl ? task.sourceUrl.replace(/^https?:\/\//, "") : ""
+  ].filter(Boolean).slice(0, 2);
+}
+
+function expandedMetaItems(task) {
+  return [
+    modeLabel(task.mode),
+    task.stage ? `阶段：${task.stage}` : "",
+    task.totalChunks ? `断点：${task.completedChunks || 0}/${task.totalChunks}` : ""
+  ].filter(Boolean);
+}
+
+function renderTask(task) {
+  const progress = Number.isFinite(task.progressPercent) ? Math.max(0, Math.min(100, task.progressPercent)) : 0;
+  const isExpanded = expandedTaskIds.has(task.id);
+  const inlineMeta = expandedMetaItems(task);
+  const compactMeta = compactMetaItems(task);
+
+  const detailsMarkup = isExpanded ? `
+    <div class="progress-wrap">
+      <div class="progress-head">
+        <strong>任务进度</strong>
+        <span>${progress.toFixed(0)}%</span>
+      </div>
+      <div class="progress">
+        <div class="progress-bar" style="width:${progress}%"></div>
+      </div>
+    </div>
+
+    <div class="task-meta">${renderMetaLines(task)}</div>
+
+    <div class="task-footer">
+      <section class="task-summary">
+        <div class="task-summary-head">
+          <div>
+            <p class="section-kicker">Artifacts</p>
+            <h3>结果与产物</h3>
+          </div>
+        </div>
+        <div class="detail-stack">
+          ${renderTimingMetrics(task)}
+          ${renderSavedFiles(task)}
+          ${renderExports(task)}
+          ${renderTaskDetails(task)}
+        </div>
+      </section>
+
+      <section class="task-segments">
+        <div class="task-summary-head">
+          <div>
+            <p class="section-kicker">Latest Segments</p>
+            <h3>最新分段</h3>
+          </div>
+        </div>
+        <div class="segment-list">${renderSegments(task)}</div>
+      </section>
+    </div>
+  ` : "";
+
+  return `
+    <section class="task-card ${escapeHtml(task.status)} ${isExpanded ? "expanded" : "collapsed"}">
+      <div class="task-topline">
+        <div class="task-pills">
+          <span class="task-pill">${escapeHtml(taskStatusLabel(task.status))}</span>
+          ${task.translation ? '<span class="badge">翻译</span>' : ""}
+          ${task.summaryRequested ? '<span class="badge">总结</span>' : ""}
+        </div>
+      </div>
+
+      <div class="task-title">
+        <div class="task-header-main">
+          <div>
+            <h4>${escapeHtml(task.name || "未命名任务")}</h4>
+            <p class="task-subtitle">${escapeHtml(task.id)} · ${progress.toFixed(0)}%</p>
+          </div>
+          ${isExpanded ? `
+            <div class="task-inline-meta">
+              ${inlineMeta.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+            </div>
+          ` : `
+            <div class="task-compact-meta">
+              ${compactMeta.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+            </div>
+          `}
+        </div>
+        <div class="task-head-actions">
+          ${isExpanded ? taskSummaryActions(task) : ""}
+          <button type="button" class="task-toggle" data-action="toggle-task" data-task-id="${escapeHtml(task.id)}">
+            ${isExpanded ? "收起" : "展开"}
+          </button>
+        </div>
+      </div>
+
+      ${task.error ? `<div class="error">${escapeHtml(task.error)}</div>` : ""}
+      ${detailsMarkup}
+    </section>
+  `;
+}
+
+function rerenderTasks() {
+  const ordered = filteredTasks();
+  const total = tasks.size;
+
+  tasksEl.innerHTML = ordered.length
+    ? ordered.map(renderTask).join("")
+    : '<p class="empty">没有匹配的任务，试试切换筛选或清空搜索。</p>';
+
+  taskResultsInfoEl.textContent = total
+    ? `当前显示 ${ordered.length} / ${total} 个任务`
+    : "暂无任务";
+
+  document.querySelectorAll(".filter-chip").forEach((button) => {
+    button.classList.toggle("active", button.getAttribute("data-filter") === currentFilter);
+  });
+
+  if (currentView === "tasks") {
+    window.requestAnimationFrame(updateStageHeight);
+  }
+}
+
+function rerender() {
+  renderTaskStats();
+  rerenderTasks();
+  if (currentView === "status") {
+    window.requestAnimationFrame(updateStageHeight);
+  }
+}
+
+async function retrySummary(taskId) {
+  try {
+    const task = await fetchJSON(`/api/tasks/${encodeURIComponent(taskId)}/retry-summary`, { method: "POST" });
+    upsertTask(task);
+    rerender();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function generateSummary(taskId) {
+  try {
+    const task = await fetchJSON(`/api/tasks/${encodeURIComponent(taskId)}/generate-summary`, { method: "POST" });
+    upsertTask(task);
+    rerender();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function retryExport(taskId, target) {
+  try {
+    const task = await fetchJSON(`/api/tasks/${encodeURIComponent(taskId)}/retry-exports`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targets: [target] })
+    });
+    upsertTask(task);
+    rerender();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "absolute";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
+async function handleCopyCurl(button) {
+  const targetId = button.getAttribute("data-copy-target");
+  if (!targetId) {
+    return;
+  }
+
+  const code = document.getElementById(targetId);
+  if (!code) {
+    return;
+  }
+
+  const original = button.textContent;
+
+  try {
+    await copyText(code.textContent || "");
+    button.textContent = "已复制";
+  } catch (err) {
+    button.textContent = "复制失败";
+  }
+
+  window.setTimeout(() => {
+    button.textContent = original;
+  }, 1600);
+}
+
+async function loadInitial() {
+  const [health, list] = await Promise.all([
+    fetchJSON("/api/health"),
+    fetchJSON("/api/tasks")
+  ]);
+
+  healthState = health;
+  renderHealth();
+  renderExportOptions("file-export-options");
+  renderExportOptions("url-export-options");
+  list.forEach((task) => upsertTask(task));
+  rerender();
+}
+
+function attachEvents() {
+  const sse = new EventSource("/api/events");
+  sse.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === "task.deleted" && data.taskId) {
+      tasks.delete(data.taskId);
+      expandedTaskIds.delete(data.taskId);
+      rerender();
+      return;
+    }
+    if (data.payload && data.payload.id) {
+      upsertTask(data.payload);
+      rerender();
+    }
+  };
+
+  themeToggleEl.addEventListener("click", () => {
+    applyTheme(rootEl.getAttribute("data-theme") === "dark" ? "light" : "dark");
+  });
+
+  window.addEventListener("resize", () => {
+    window.requestAnimationFrame(updateStageHeight);
+  });
+
+  taskSearchEl.addEventListener("input", (event) => {
+    currentSearch = event.target.value || "";
+    rerenderTasks();
+  });
+
+  document.getElementById("expand-active").addEventListener("click", () => {
+    Array.from(tasks.values()).forEach((task) => {
+      if (task.status === "running" || task.status === "queued" || task.status === "failed") {
+        expandedTaskIds.add(task.id);
+      }
+    });
+    rerenderTasks();
+  });
+
+  document.getElementById("collapse-all").addEventListener("click", () => {
+    expandedTaskIds.clear();
+    rerenderTasks();
+  });
+
+  document.addEventListener("click", async (event) => {
+    const viewButton = event.target.closest(".view-tab");
+    if (viewButton) {
+      setView(viewButton.getAttribute("data-view") || "status");
+      return;
+    }
+
+    const sourceButton = event.target.closest(".sub-tab");
+    if (sourceButton) {
+      setSource(sourceButton.getAttribute("data-source") || "file");
+      return;
+    }
+
+    const copyButton = event.target.closest(".copy-btn");
+    if (copyButton) {
+      await handleCopyCurl(copyButton);
+      return;
+    }
+
+    const filterButton = event.target.closest(".filter-chip");
+    if (filterButton) {
+      currentFilter = filterButton.getAttribute("data-filter") || "all";
+      rerenderTasks();
+      return;
+    }
+
+    const actionButton = event.target.closest("[data-action]");
+    if (!actionButton) {
+      return;
+    }
+
+    const action = actionButton.getAttribute("data-action");
+    const taskId = actionButton.getAttribute("data-task-id");
+
+    if (action === "toggle-task" && taskId) {
+      if (expandedTaskIds.has(taskId)) {
+        expandedTaskIds.delete(taskId);
+      } else {
+        expandedTaskIds.add(taskId);
+      }
+      rerenderTasks();
+      return;
+    }
+
+    if (!taskId) {
+      return;
+    }
+
+    if (action === "generate-summary") {
+      await generateSummary(taskId);
+      return;
+    }
+
+    if (action === "retry-summary") {
+      await retrySummary(taskId);
+      return;
+    }
+
+    if (action === "retry-export") {
+      const target = actionButton.getAttribute("data-export-target");
+      if (target) {
+        await retryExport(taskId, target);
+      }
+    }
+  });
+}
+
+document.getElementById("file-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const formData = new FormData(form);
+
+  try {
+    const created = await fetchJSON("/api/tasks", { method: "POST", body: formData });
+    (Array.isArray(created) ? created : [created]).forEach((task) => upsertTask(task));
+    form.reset();
+    setView("tasks");
+    rerender();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+document.getElementById("url-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const formData = new FormData(form);
+  const payload = {
+    name: formData.get("name") || "",
+    language: formData.get("language") || "",
+    urlsText: formData.get("urlsText") || "",
+    translate: formData.get("translate") === "on",
+    summarize: formData.get("summarize") === "on",
+    exportTargets: selectedExportTargets(form)
+  };
+
+  try {
+    const created = await fetchJSON("/api/url-tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    (Array.isArray(created) ? created : [created]).forEach((task) => upsertTask(task));
+    form.reset();
+    setView("tasks");
+    rerender();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+initializeTheme();
+setView("status", true);
+setSource("file");
+
+loadInitial()
+  .then(attachEvents)
+  .then(() => {
+    window.requestAnimationFrame(updateStageHeight);
+  })
+  .catch((err) => {
+    healthEl.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+  });

@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Whisper Queue Console</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">WQ</div>
+        <div>
+          <p class="eyebrow">Whisper Pipeline Console</p>
+          <h1>任务转写与结果管理台</h1>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button type="button" class="theme-toggle ghost-btn" id="theme-toggle" aria-label="切换主题">切换主题</button>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="banner-shell surface">
+        <header class="banner-tabs" role="tablist" aria-label="页面视图切换">
+          <button type="button" class="view-tab active" data-view="status">系统状态</button>
+          <button type="button" class="view-tab" data-view="submit">任务提交</button>
+          <button type="button" class="view-tab" data-view="tasks">任务列表</button>
+          <button type="button" class="view-tab" data-view="api">接口文档</button>
+        </header>
+
+        <div class="banner-stage" id="banner-stage">
+          <section class="banner-panel active" data-panel="status">
+            <div class="banner-panel-scroll">
+              <div class="banner-copy">
+                <p class="section-kicker">System Overview</p>
+                <h2>面向转写工作流的控制台：提交任务、跟踪进度、管理结果。</h2>
+                <p class="banner-text">这里会显示当前服务健康状态、任务统计和导出能力，适合本地批量处理文件或 B 站链接转写任务。</p>
+              </div>
+              <div class="status-layout">
+                <section class="status-block">
+                  <div class="section-heading">
+                    <div>
+                      <p class="section-kicker">System Pulse</p>
+                      <h3>系统状态</h3>
+                    </div>
+                  </div>
+                  <div id="health" class="status-grid"></div>
+                </section>
+                <section class="status-block">
+                  <div class="section-heading">
+                    <div>
+                      <p class="section-kicker">Queue Snapshot</p>
+                      <h3>任务概览</h3>
+                    </div>
+                  </div>
+                  <div id="task-stats" class="summary-grid"></div>
+                </section>
+              </div>
+            </div>
+          </section>
+
+          <section class="banner-panel" data-panel="submit">
+            <div class="banner-panel-scroll">
+              <div class="submit-shell">
+                <div class="work-head">
+                  <div class="section-heading">
+                    <div>
+                      <p class="section-kicker">Unified Intake</p>
+                      <h3>任务提交</h3>
+                    </div>
+                  </div>
+                  <div class="sub-tabs" role="tablist" aria-label="任务来源切换">
+                    <button type="button" class="sub-tab active" data-source="file">文件任务</button>
+                    <button type="button" class="sub-tab" data-source="url">B 站链接任务</button>
+                  </div>
+                </div>
+
+                <div class="composer-stack">
+                  <form class="form-panel source-panel active" id="file-form" data-source-panel="file">
+                    <div class="panel-head">
+                      <div>
+                        <p class="section-kicker">Local Media</p>
+                        <h3>文件任务</h3>
+                      </div>
+                    </div>
+
+                    <div class="field-grid">
+                      <label class="field">
+                        <span>任务名前缀</span>
+                        <input name="name" placeholder="可选，例如：课程整理">
+                      </label>
+                      <label class="field">
+                        <span>语言</span>
+                        <input name="language" placeholder="可选，例如：zh / en / ja">
+                      </label>
+                    </div>
+
+                    <label class="field field-block">
+                      <span>选择音视频文件</span>
+                      <input name="file" type="file" multiple required>
+                    </label>
+
+                    <div class="toggle-grid">
+                      <label class="check-card">
+                        <input name="translate" type="checkbox">
+                        <span>
+                          <strong>生成翻译</strong>
+                          <small>使用 LLM 追加翻译文本</small>
+                        </span>
+                      </label>
+                      <label class="check-card">
+                        <input name="summarize" type="checkbox">
+                        <span>
+                          <strong>生成总结</strong>
+                          <small>输出 Markdown 总结内容</small>
+                        </span>
+                      </label>
+                    </div>
+
+                    <fieldset class="exports-box">
+                      <legend>总结导出平台</legend>
+                      <div class="export-options" id="file-export-options"></div>
+                    </fieldset>
+
+                    <button type="submit" class="primary-btn submit-btn">提交文件任务</button>
+                  </form>
+
+                  <form class="form-panel source-panel" id="url-form" data-source-panel="url">
+                    <div class="panel-head">
+                      <div>
+                        <p class="section-kicker">Batch URL</p>
+                        <h3>B 站链接任务</h3>
+                      </div>
+                    </div>
+
+                    <div class="field-grid">
+                      <label class="field">
+                        <span>任务名前缀</span>
+                        <input name="name" placeholder="可选，会作为任务名前缀显示">
+                      </label>
+                      <label class="field">
+                        <span>语言</span>
+                        <input name="language" placeholder="可选，例如：zh / en / ja">
+                      </label>
+                    </div>
+
+                    <label class="field field-block">
+                      <span>每行一个 B 站视频链接</span>
+                      <textarea name="urlsText" rows="8" placeholder="一行一个视频链接&#10;https://www.bilibili.com/video/BVxxxxxxxxxx&#10;https://www.bilibili.com/video/BVyyyyyyyyyy" required></textarea>
+                    </label>
+
+                    <div class="toggle-grid">
+                      <label class="check-card">
+                        <input name="translate" type="checkbox">
+                        <span>
+                          <strong>生成翻译</strong>
+                          <small>对转写结果追加翻译文本</small>
+                        </span>
+                      </label>
+                      <label class="check-card">
+                        <input name="summarize" type="checkbox">
+                        <span>
+                          <strong>生成总结</strong>
+                          <small>对内容进行 Markdown 总结</small>
+                        </span>
+                      </label>
+                    </div>
+
+                    <fieldset class="exports-box">
+                      <legend>总结导出平台</legend>
+                      <div class="export-options" id="url-export-options"></div>
+                    </fieldset>
+
+                    <button type="submit" class="primary-btn submit-btn">提交链接任务</button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="banner-panel" data-panel="tasks">
+            <div class="banner-panel-scroll">
+              <section class="tasks-panel">
+                <div class="panel-head">
+                  <div>
+                    <p class="section-kicker">Live Queue</p>
+                    <h3>任务列表</h3>
+                  </div>
+                </div>
+                <div class="task-toolbar">
+                  <label class="task-search">
+                    <span class="task-toolbar-label">搜索</span>
+                    <input id="task-search" type="search" placeholder="按任务名、ID、链接或文件名筛选">
+                  </label>
+                  <div class="task-filter-group" role="tablist" aria-label="任务状态筛选">
+                    <button type="button" class="filter-chip active" data-filter="all">全部</button>
+                    <button type="button" class="filter-chip" data-filter="running">进行中</button>
+                    <button type="button" class="filter-chip" data-filter="queued">排队中</button>
+                    <button type="button" class="filter-chip" data-filter="completed">已完成</button>
+                    <button type="button" class="filter-chip" data-filter="failed">失败</button>
+                  </div>
+                  <div class="task-toolbar-actions">
+                    <button type="button" class="ghost-btn compact-btn" id="expand-active">展开活跃任务</button>
+                    <button type="button" class="ghost-btn compact-btn" id="collapse-all">全部折叠</button>
+                  </div>
+                </div>
+                <div id="task-results-info" class="task-results-info"></div>
+                <div id="tasks" class="tasks"></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="banner-panel" data-panel="api">
+            <div class="banner-panel-scroll">
+              <section class="api-panel">
+                <div class="panel-head">
+                  <div>
+                    <p class="section-kicker">For Automation</p>
+                    <h3>接口文档</h3>
+                  </div>
+                </div>
+                <div class="tips">
+                  <p>默认服务地址示例：<code>http://localhost:18880</code></p>
+                  <p><code>POST /api/tasks</code> 用于本地文件上传，<code>POST /api/url-tasks</code> 用于批量提交 B 站链接，<code>GET /callback/tasks/{id}</code> 用于外部查询任务基础状态，<code>POST /api/tasks/{id}/retry-exports</code> 用于对已有总结重新上传到指定平台。</p>
+                </div>
+                <div class="api-grid">
+                  <article class="api-card">
+                    <div class="curl-head">
+                      <h4>1. 提交本地文件任务</h4>
+                      <button type="button" class="ghost-btn copy-btn" data-copy-target="curl-file">复制</button>
+                    </div>
+                    <pre><code id="curl-file">curl -X POST "http://localhost:18880/api/tasks" ^
+  -F "name=课程整理" ^
+  -F "language=zh" ^
+  -F "translate=false" ^
+  -F "summarize=true" ^
+  -F "exportTarget=ima" ^
+  -F "exportTarget=obsidian" ^
+  -F "file=@D:\videos\demo.mp4"</code></pre>
+                  </article>
+                  <article class="api-card">
+                    <div class="curl-head">
+                      <h4>2. 提交 B 站链接任务</h4>
+                      <button type="button" class="ghost-btn copy-btn" data-copy-target="curl-url">复制</button>
+                    </div>
+                    <pre><code id="curl-url">curl -X POST "http://localhost:18880/api/url-tasks" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"name\":\"课程整理\",\"language\":\"zh\",\"translate\":false,\"summarize\":true,\"exportTargets\":[\"ima\",\"notion\"],\"urlsText\":\"https://www.bilibili.com/video/BV1xxxxx\\nhttps://www.bilibili.com/video/BV2yyyyy\"}"</code></pre>
+                  </article>
+                  <article class="api-card">
+                    <div class="curl-head">
+                      <h4>3. 查询任务状态</h4>
+                      <button type="button" class="ghost-btn copy-btn" data-copy-target="curl-status">复制</button>
+                    </div>
+                    <pre><code id="curl-status">curl "http://localhost:18880/callback/tasks/taska8k2m4p9x1z7"</code></pre>
+                  </article>
+                  <article class="api-card">
+                    <div class="curl-head">
+                      <h4>4. 重新上传总结到平台</h4>
+                      <button type="button" class="ghost-btn copy-btn" data-copy-target="curl-retry">复制</button>
+                    </div>
+                    <pre><code id="curl-retry">curl -X POST "http://localhost:18880/api/tasks/taska8k2m4p9x1z7/retry-exports" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"targets\":[\"ima\",\"notion\"]}"</code></pre>
+                  </article>
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

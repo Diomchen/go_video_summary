@@ -1,0 +1,102 @@
+package exporter
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"go_subtitle_whisper/internal/domain"
+)
+
+type IMAExporter struct {
+	clientID string
+	apiKey   string
+	folderID string
+	baseURL  string
+	client   *http.Client
+}
+
+func NewIMAExporter(clientID, apiKey, folderID string) *IMAExporter {
+	if strings.TrimSpace(clientID) == "" || strings.TrimSpace(apiKey) == "" {
+		return nil
+	}
+	return &IMAExporter{
+		clientID: strings.TrimSpace(clientID),
+		apiKey:   strings.TrimSpace(apiKey),
+		folderID: strings.TrimSpace(folderID),
+		baseURL:  "https://ima.qq.com/openapi/note/v1",
+		client:   &http.Client{Timeout: 60 * time.Second},
+	}
+}
+
+func (e *IMAExporter) Name() string {
+	return "ima"
+}
+
+func (e *IMAExporter) ExportMarkdown(ctx context.Context, task *domain.Task, _ string, markdown string) (domain.ExportResult, error) {
+	content := strings.TrimSpace(markdown)
+	if content == "" {
+		return domain.ExportResult{Name: e.Name(), Status: "failed"}, fmt.Errorf("ima markdown content is empty")
+	}
+
+	body := map[string]any{
+		"content_format": 1,
+		"content":        content,
+	}
+	if e.folderID != "" {
+		body["folder_id"] = e.folderID
+	}
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return domain.ExportResult{Name: e.Name(), Status: "failed"}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/import_doc", bytes.NewReader(payload))
+	if err != nil {
+		return domain.ExportResult{Name: e.Name(), Status: "failed"}, err
+	}
+	req.Header.Set("ima-openapi-clientid", e.clientID)
+	req.Header.Set("ima-openapi-apikey", e.apiKey)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return domain.ExportResult{Name: e.Name(), Status: "failed"}, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return domain.ExportResult{Name: e.Name(), Status: "failed"}, err
+	}
+	if resp.StatusCode >= 300 {
+		return domain.ExportResult{Name: e.Name(), Status: "failed"}, fmt.Errorf("ima request failed: %s", strings.TrimSpace(string(respBody)))
+	}
+
+	var parsed struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			DocID string `json:"doc_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return domain.ExportResult{Name: e.Name(), Status: "failed"}, err
+	}
+	if parsed.Code != 0 {
+		message := strings.TrimSpace(parsed.Msg)
+		if message == "" {
+			message = fmt.Sprintf("ima error code %d", parsed.Code)
+		}
+		return domain.ExportResult{Name: e.Name(), Status: "failed"}, fmt.Errorf("%s", message)
+	}
+
+	target := strings.TrimSpace(parsed.Data.DocID)
+	return domain.ExportResult{Name: e.Name(), Status: "success", Target: target}, nil
+}
