@@ -32,6 +32,7 @@ type Config struct {
 	ChunkSeconds       int
 	ChunkParallelism   int
 	TaskWorkers        int
+	SummaryWorkers     int
 	BilibiliUserAgent  string
 	BilibiliTimeout    time.Duration
 	NotionToken        string
@@ -69,6 +70,7 @@ func LoadFromEnv() Config {
 		ChunkSeconds:       getIntEnv("CHUNK_SECONDS", 45),
 		ChunkParallelism:   getIntEnv("CHUNK_PARALLELISM", 1),
 		TaskWorkers:        getIntEnv("TASK_WORKERS", 1),
+		SummaryWorkers:     getIntEnv("SUMMARY_WORKERS", 1),
 		BilibiliUserAgent:  getEnv("BILIBILI_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"),
 		BilibiliTimeout:    getDurationEnv("BILIBILI_TIMEOUT", 2*time.Minute),
 		NotionToken:        os.Getenv("NOTION_TOKEN"),

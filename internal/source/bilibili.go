@@ -23,6 +23,19 @@ type BilibiliMedia struct {
 	Ext      string
 }
 
+type BilibiliCollectionVideo struct {
+	BVID    string
+	Title   string
+	PageURL string
+}
+
+type BilibiliCollection struct {
+	Name   string
+	URL    string
+	Author string
+	Videos []BilibiliCollectionVideo
+}
+
 type BilibiliClient struct {
 	httpClient *http.Client
 	userAgent  string
@@ -233,7 +246,7 @@ var (
 	playInfoPrefix     = regexp.MustCompile(`(?s)(?:window\.__playinfo__|__playinfo__)\s*=\s*\{`)
 	initialStatePrefix = regexp.MustCompile(`(?s)window\.__INITIAL_STATE__\s*=\s*\{`)
 	titlePattern       = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
-	bilibiliURLPattern = regexp.MustCompile(`(?i)\b(?:https?://|www\.)?(?:www\.)?(?:bilibili\.com/[^\s"'<>]+|b23\.tv/[^\s"'<>]+)\b`)
+	bilibiliURLPattern = regexp.MustCompile(`(?i)\b(?:https?://)?(?:www\.|space\.)?(?:bilibili\.com/[^\s"'<>]+|b23\.tv/[^\s"'<>]+)\b`)
 	bvidPattern        = regexp.MustCompile(`(?i)\b(BV[0-9A-Za-z]{10})\b`)
 )
 
@@ -425,6 +438,184 @@ func ExtractBilibiliInputs(raw string) []string {
 	}
 
 	return out
+}
+
+var collectionURLPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)space\.bilibili\.com/\d+/lists/\d+`),
+	regexp.MustCompile(`(?i)bilibili\.com/medialist/play/\d+`),
+	regexp.MustCompile(`(?i)bilibili\.com/playlist/pl\d+`),
+}
+
+func IsCollectionURL(rawURL string) bool {
+	value := strings.TrimSpace(rawURL)
+	for _, pattern := range collectionURLPatterns {
+		if pattern.MatchString(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractCollectionIDs(rawURL string) (mid string, seasonID string) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", ""
+	}
+
+	// Pattern: space.bilibili.com/{mid}/lists/{season_id}?type=season
+	re := regexp.MustCompile(`(?i)/(\d+)/lists/(\d+)`)
+	if matches := re.FindStringSubmatch(parsed.Path); len(matches) >= 3 {
+		return matches[1], matches[2]
+	}
+
+	// Pattern: bilibili.com/medialist/play/{season_id}
+	re2 := regexp.MustCompile(`(?i)/medialist/play/(\d+)`)
+	if matches := re2.FindStringSubmatch(parsed.Path); len(matches) >= 2 {
+		return "", matches[1]
+	}
+
+	// Pattern: bilibili.com/playlist/pl{season_id}
+	re3 := regexp.MustCompile(`(?i)/playlist/pl(\d+)`)
+	if matches := re3.FindStringSubmatch(parsed.Path); len(matches) >= 2 {
+		return "", matches[1]
+	}
+
+	return "", ""
+}
+
+func (c *BilibiliClient) ResolveCollection(ctx context.Context, rawURL string) (*BilibiliCollection, error) {
+	mid, seasonID := extractCollectionIDs(rawURL)
+	if seasonID == "" {
+		return nil, fmt.Errorf("cannot extract season id from collection url: %s", rawURL)
+	}
+
+	// If mid is missing, try to get it from the season info API first
+	if mid == "" {
+		infoURL := fmt.Sprintf("https://api.bilibili.com/x/space/season/info?season_id=%s", seasonID)
+		info, err := c.fetchJSON(ctx, infoURL)
+		if err == nil {
+			if data, ok := info["data"].(map[string]any); ok {
+				if m, ok := data["mid"].(float64); ok && m > 0 {
+					mid = fmt.Sprintf("%.0f", m)
+				}
+			}
+		}
+	}
+
+	if mid == "" {
+		return nil, fmt.Errorf("cannot determine mid for season %s", seasonID)
+	}
+
+	// Fetch all videos in the collection (paginated)
+	var allVideos []BilibiliCollectionVideo
+	collectionName := ""
+	authorName := ""
+	pageNum := 1
+	pageSize := 100
+
+	for {
+		apiURL := fmt.Sprintf("https://api.bilibili.com/x/polymer/web-space/seasons_archives_list?mid=%s&season_id=%s&sort_reverse=false&page_num=%d&page_size=%d", mid, seasonID, pageNum, pageSize)
+		result, err := c.fetchJSON(ctx, apiURL)
+		if err != nil {
+			return nil, fmt.Errorf("fetch season archives (page %d): %w", pageNum, err)
+		}
+
+		data, ok := result["data"].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("unexpected season API response structure")
+		}
+
+		// Extract metadata from first page
+		if pageNum == 1 {
+			if meta, ok := data["meta"].(map[string]any); ok {
+				if name, ok := meta["name"].(string); ok {
+					collectionName = name
+				}
+				if owner, ok := meta["owner"].(map[string]any); ok {
+					if name, ok := owner["name"].(string); ok {
+						authorName = name
+					}
+				}
+				// Also try upper_name for author
+				if authorName == "" {
+					if name, ok := meta["upper_name"].(string); ok {
+						authorName = name
+					}
+				}
+			}
+		}
+
+		archives, ok := data["archives"].([]any)
+		if !ok {
+			break
+		}
+
+		for _, item := range archives {
+			archive, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			bvid, _ := archive["bvid"].(string)
+			title, _ := archive["title"].(string)
+			if bvid == "" {
+				continue
+			}
+			allVideos = append(allVideos, BilibiliCollectionVideo{
+				BVID:    bvid,
+				Title:   title,
+				PageURL: BuildBilibiliVideoURL(bvid),
+			})
+		}
+
+		// Check if there are more pages
+		hasMore, _ := data["has_more"].(bool)
+		if !hasMore || len(archives) < pageSize {
+			break
+		}
+		pageNum++
+	}
+
+	if len(allVideos) == 0 {
+		return nil, fmt.Errorf("no videos found in collection %s", seasonID)
+	}
+
+	return &BilibiliCollection{
+		Name:   collectionName,
+		URL:    rawURL,
+		Author: authorName,
+		Videos: allVideos,
+	}, nil
+}
+
+func (c *BilibiliClient) fetchJSON(ctx context.Context, apiURL string) (map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("Referer", "https://www.bilibili.com/")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse API response: %w", err)
+	}
+	code, _ := result["code"].(float64)
+	if code != 0 {
+		msg, _ := result["message"].(string)
+		return nil, fmt.Errorf("API error: code=%.0f msg=%s", code, msg)
+	}
+	return result, nil
 }
 
 func ExtractBVID(rawURL string) string {

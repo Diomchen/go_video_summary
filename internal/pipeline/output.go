@@ -38,13 +38,55 @@ func saveTaskOutputs(task *domain.Task, outputDir string, saveAll bool) ([]strin
 	}
 	if strings.TrimSpace(task.Summary) != "" {
 		summaryPath = filepath.Join(outputDir, base+".summary.md")
-		if err := os.WriteFile(summaryPath, []byte(task.Summary), 0o644); err != nil {
+		summaryContent := buildLocalSummaryContent(task)
+		if err := os.WriteFile(summaryPath, []byte(summaryContent), 0o644); err != nil {
 			return saved, summaryPath, err
 		}
 		saved = append(saved, summaryPath)
 	}
 
 	return saved, summaryPath, nil
+}
+
+func buildLocalSummaryContent(task *domain.Task) string {
+	var hasMeta bool
+	check := func(s string) bool { return strings.TrimSpace(s) != "" }
+	if check(task.AuthorName) || check(task.SourceURL) || check(task.CollectionName) || len(task.DomainTags) > 0 {
+		hasMeta = true
+	}
+	if !hasMeta {
+		return task.Summary
+	}
+
+	var b strings.Builder
+	b.WriteString("---\n")
+	if check(task.Name) {
+		fmt.Fprintf(&b, "title: %q\n", task.Name)
+	}
+	if check(task.AuthorName) {
+		fmt.Fprintf(&b, "author: %q\n", task.AuthorName)
+	}
+	if check(task.SourceURL) {
+		fmt.Fprintf(&b, "source_url: %q\n", task.SourceURL)
+	}
+	if check(task.CollectionName) {
+		fmt.Fprintf(&b, "collection: %q\n", task.CollectionName)
+	}
+	if task.CollectionIndex > 0 {
+		fmt.Fprintf(&b, "collection_index: %d\n", task.CollectionIndex)
+	}
+	if check(task.CollectionURL) {
+		fmt.Fprintf(&b, "collection_url: %q\n", task.CollectionURL)
+	}
+	if len(task.DomainTags) > 0 {
+		b.WriteString("domain_tags:\n")
+		for _, tag := range task.DomainTags {
+			fmt.Fprintf(&b, "  - %q\n", tag)
+		}
+	}
+	b.WriteString("---\n\n")
+	b.WriteString(task.Summary)
+	return b.String()
 }
 
 func slugify(value string) string {

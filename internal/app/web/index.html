@@ -274,6 +274,30 @@
     </main>
   </div>
 
+  <div id="collection-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="collection-modal-title">合集预览</h3>
+        <button type="button" class="ghost-btn modal-close" id="collection-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="collection-modal-meta" class="modal-meta"></p>
+        <div class="modal-toolbar">
+          <label class="modal-select-all">
+            <input type="checkbox" id="collection-select-all" checked>
+            <span>全选</span>
+          </label>
+          <span id="collection-selected-count" class="modal-count"></span>
+        </div>
+        <div id="collection-videos" class="collection-video-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="ghost-btn" id="collection-modal-cancel">取消</button>
+        <button type="button" class="primary-btn" id="collection-modal-confirm">确认添加选中视频</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>

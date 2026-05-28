@@ -72,15 +72,19 @@ type Manager struct {
 	store            *TaskStore
 	chunkSeconds     int
 	chunkParallelism int
-	jobs             chan taskJob
+	processJobs chan taskJob
+	summaryJobs chan taskJob
 
 	mu    sync.RWMutex
 	tasks map[string]*domain.Task
 }
 
-func NewManager(transcriber service.Transcriber, translator service.Translator, summarizer service.Summarizer, bilibili *source.BilibiliClient, exporters []exporter.MarkdownExporter, events *Broadcaster, autoSave bool, outputDir string, checkpointDir string, chunkSeconds int, chunkParallelism int, workers int) *Manager {
-	if workers <= 0 {
-		workers = 1
+func NewManager(transcriber service.Transcriber, translator service.Translator, summarizer service.Summarizer, bilibili *source.BilibiliClient, exporters []exporter.MarkdownExporter, events *Broadcaster, autoSave bool, outputDir string, checkpointDir string, chunkSeconds int, chunkParallelism int, processWorkers int, summaryWorkers int) *Manager {
+	if processWorkers <= 0 {
+		processWorkers = 1
+	}
+	if summaryWorkers <= 0 {
+		summaryWorkers = 1
 	}
 	if chunkSeconds <= 0 {
 		chunkSeconds = 45
@@ -111,14 +115,18 @@ func NewManager(transcriber service.Transcriber, translator service.Translator, 
 		store:            NewTaskStore(checkpointDir),
 		chunkSeconds:     chunkSeconds,
 		chunkParallelism: chunkParallelism,
-		jobs:             make(chan taskJob, 256),
+		processJobs:      make(chan taskJob, 256),
+		summaryJobs:      make(chan taskJob, 256),
 		tasks:            make(map[string]*domain.Task),
 	}
 	_ = m.store.Ensure()
 	_ = m.restoreTasks()
 
-	for i := 0; i < workers; i++ {
-		go m.worker()
+	for i := 0; i < processWorkers; i++ {
+		go m.processWorker()
+	}
+	for i := 0; i < summaryWorkers; i++ {
+		go m.summaryWorker()
 	}
 
 	return m
@@ -136,7 +144,7 @@ func (m *Manager) CreateFileTask(name, filename string, data []byte, language st
 		_ = os.WriteFile(task.InputFilePath, data, 0o644)
 	}
 	m.persistTask(task.ID)
-	m.enqueue(task.ID)
+	m.enqueueProcess(task.ID)
 	return task
 }
 
@@ -152,16 +160,106 @@ func (m *Manager) CreateURLTask(name, rawURL, language string, translate, summar
 	task.Exports = defaultExports(task.ExportTargets)
 	m.saveTask(task)
 	m.persistTask(task.ID)
-	m.enqueue(task.ID)
+	m.enqueueProcess(task.ID)
 	return task
 }
 
-func (m *Manager) enqueue(id string) {
-	m.jobs <- taskJob{id: id}
+func (m *Manager) CreateURLTaskWithMeta(name, rawURL, language string, translate, summarize bool, exportTargets []string, collectionName, collectionURL, authorName string, collectionIndex int) *domain.Task {
+	task := m.CreateURLTask(name, rawURL, language, translate, summarize, exportTargets)
+	if collectionName != "" || authorName != "" || collectionIndex > 0 {
+		m.updateTask(task.ID, func(t *domain.Task) {
+			t.CollectionName = collectionName
+			t.CollectionURL = collectionURL
+			t.AuthorName = authorName
+			t.CollectionIndex = collectionIndex
+		})
+		m.persistTask(task.ID)
+	}
+	return task
 }
 
-func (m *Manager) worker() {
-	for job := range m.jobs {
+func (m *Manager) CreateCollectionTasks(rawURL, language string, translate, summarize bool, exportTargets []string) ([]*domain.Task, error) {
+	if m.bilibili == nil {
+		return nil, fmt.Errorf("bilibili resolver is not configured")
+	}
+	collection, err := m.bilibili.ResolveCollection(context.Background(), rawURL)
+	if err != nil {
+		return nil, err
+	}
+
+	tasks := make([]*domain.Task, 0, len(collection.Videos))
+	for i, video := range collection.Videos {
+		task := m.CreateURLTaskWithMeta(
+			video.Title,
+			video.PageURL,
+			language,
+			translate,
+			summarize,
+			exportTargets,
+			collection.Name,
+			collection.URL,
+			collection.Author,
+			i+1, // 1-based index
+		)
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
+type CollectionPreviewResponse struct {
+	Name   string                    `json:"name"`
+	URL    string                    `json:"url"`
+	Author string                    `json:"author"`
+	Videos []CollectionPreviewVideo  `json:"videos"`
+}
+
+type CollectionPreviewVideo struct {
+	BVID    string `json:"bvid"`
+	Title   string `json:"title"`
+	PageURL string `json:"pageURL"`
+	Index   int    `json:"index"`
+}
+
+func (m *Manager) CollectionPreview(ctx context.Context, rawURL string) (*CollectionPreviewResponse, error) {
+	if m.bilibili == nil {
+		return nil, fmt.Errorf("bilibili resolver is not configured")
+	}
+	collection, err := m.bilibili.ResolveCollection(ctx, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	videos := make([]CollectionPreviewVideo, len(collection.Videos))
+	for i, v := range collection.Videos {
+		videos[i] = CollectionPreviewVideo{
+			BVID:    v.BVID,
+			Title:   v.Title,
+			PageURL: v.PageURL,
+			Index:   i + 1,
+		}
+	}
+	return &CollectionPreviewResponse{
+		Name:   collection.Name,
+		URL:    collection.URL,
+		Author: collection.Author,
+		Videos: videos,
+	}, nil
+}
+
+func (m *Manager) enqueueProcess(id string) {
+	m.processJobs <- taskJob{id: id}
+}
+
+func (m *Manager) enqueueSummary(id string) {
+	m.updateTask(id, func(t *domain.Task) {
+		t.Stage = "pending_summary"
+		t.PendingSummary = true
+	})
+	m.publishTask(id)
+	m.summaryJobs <- taskJob{id: id}
+}
+
+func (m *Manager) processWorker() {
+	for job := range m.processJobs {
 		task, ok := m.GetTask(job.id)
 		if !ok {
 			continue
@@ -172,6 +270,12 @@ func (m *Manager) worker() {
 		default:
 			m.runFileTask(context.Background(), task.ID)
 		}
+	}
+}
+
+func (m *Manager) summaryWorker() {
+	for job := range m.summaryJobs {
+		m.runSummaryPipeline(context.Background(), job.id)
 	}
 }
 
@@ -394,14 +498,14 @@ func (m *Manager) RetrySummary(id string) (*domain.Task, error) {
 	m.updateTask(id, func(task *domain.Task) {
 		task.SummaryRequested = true
 		task.Status = domain.TaskRunning
-		task.Stage = "summarizing"
+		task.Stage = "pending_summary"
 		task.ProgressPercent = 100
 		task.Error = ""
 		task.SummaryError = ""
 	})
 	m.publishTask(id)
 
-	go m.runSummaryRetry(context.Background(), id)
+	go m.enqueueSummary(id)
 	updated, _ := m.GetTask(id)
 	return updated, nil
 }
@@ -424,14 +528,14 @@ func (m *Manager) GenerateSummary(id string) (*domain.Task, error) {
 	m.updateTask(id, func(task *domain.Task) {
 		task.SummaryRequested = true
 		task.Status = domain.TaskRunning
-		task.Stage = "summarizing"
+		task.Stage = "pending_summary"
 		task.ProgressPercent = 100
 		task.Error = ""
 		task.SummaryError = ""
 	})
 	m.publishTask(id)
 
-	go m.runSummaryRetry(context.Background(), id)
+	go m.enqueueSummary(id)
 	updated, _ := m.GetTask(id)
 	return updated, nil
 }
@@ -507,7 +611,7 @@ func (m *Manager) runFileTask(ctx context.Context, id string) {
 	if filename == "" {
 		filename = filepath.Base(task.InputFilePath)
 	}
-	m.runPipeline(ctx, id, filename, data)
+	m.runProcessPipeline(ctx, id, filename, data)
 }
 
 func (m *Manager) runURLTask(ctx context.Context, id string) {
@@ -571,10 +675,10 @@ func (m *Manager) runURLTask(ctx context.Context, id string) {
 	if filename == "" {
 		filename = "source.m4a"
 	}
-	m.runPipeline(ctx, id, filename, data)
+	m.runProcessPipeline(ctx, id, filename, data)
 }
 
-func (m *Manager) runPipeline(ctx context.Context, id, filename string, data []byte) {
+func (m *Manager) runProcessPipeline(ctx context.Context, id, filename string, data []byte) {
 	task, ok := m.GetTask(id)
 	if !ok {
 		return
@@ -605,33 +709,81 @@ func (m *Manager) runPipeline(ctx context.Context, id, filename string, data []b
 		}
 	}
 
-	summary := ""
-	if task.SummaryRequested && m.summarizer != nil {
-		m.setTaskProgress(id, "summarizing", 100)
-		sourceText := text
-		if translated != "" {
-			sourceText = translated
-		}
-		startedAt := time.Now()
-		summary, err = m.summarizer.Summarize(ctx, sourceText, service.SummaryOptions{
-			Title:     task.Name,
-			SourceURL: task.SourceURL,
-			BVID:      source.ExtractBVID(task.SourceURL),
-		})
-		elapsed := durationMilliseconds(startedAt)
-		m.updateTaskMetrics(id, func(metrics *domain.TaskMetrics) {
-			metrics.SummaryDurationMs = elapsed
-		})
-		if err != nil {
-			m.failSummary(id, text, translated, err)
-			return
-		}
+	// Store transcript/translation, then route to summary queue or complete.
+	m.updateTask(id, func(task *domain.Task) {
+		task.Transcript = text
+		task.TranslatedText = translated
+		task.PendingSummary = task.SummaryRequested
+	})
+	m.publishTask(id)
+
+	if task.SummaryRequested {
+		m.enqueueSummary(id)
+		return
 	}
 
-	m.completeTask(id, text, translated, summary)
+	// No summary needed — complete and auto-save.
+	m.completeTask(id, text, translated, "")
 	m.setTaskProgress(id, "saving", 100)
 	if err := m.autoSaveOutputs(ctx, id); err != nil {
 		m.failTask(id, err)
+		return
+	}
+	m.setTaskProgress(id, "completed", 100)
+	m.cleanupExpiredArtifacts(24 * time.Hour)
+}
+
+func (m *Manager) runSummaryPipeline(ctx context.Context, id string) {
+	task, ok := m.GetTask(id)
+	if !ok {
+		return
+	}
+
+	m.updateTask(id, func(task *domain.Task) {
+		task.Status = domain.TaskRunning
+		task.Stage = "summarizing"
+		task.Error = ""
+		task.SummaryError = ""
+	})
+	m.publishTask(id)
+
+	sourceText := task.Transcript
+	if strings.TrimSpace(task.TranslatedText) != "" {
+		sourceText = task.TranslatedText
+	}
+
+	startedAt := time.Now()
+	summary, domainTags, err := m.summarizer.Summarize(ctx, sourceText, service.SummaryOptions{
+		Title:           task.Name,
+		SourceURL:       task.SourceURL,
+		BVID:            source.ExtractBVID(task.SourceURL),
+		CollectionName:  task.CollectionName,
+		CollectionIndex: task.CollectionIndex,
+		AuthorName:      task.AuthorName,
+	})
+	elapsed := durationMilliseconds(startedAt)
+	m.updateTaskMetrics(id, func(metrics *domain.TaskMetrics) {
+		metrics.SummaryDurationMs = elapsed
+	})
+	if err != nil {
+		m.failSummary(id, task.Transcript, task.TranslatedText, err)
+		return
+	}
+
+	m.completeTask(id, task.Transcript, task.TranslatedText, summary)
+	if len(domainTags) > 0 {
+		m.updateTask(id, func(task *domain.Task) {
+			task.DomainTags = domainTags
+			task.PendingSummary = false
+		})
+	} else {
+		m.updateTask(id, func(task *domain.Task) {
+			task.PendingSummary = false
+		})
+	}
+	m.setTaskProgress(id, "saving", 100)
+	if err := m.autoSaveOutputs(ctx, id); err != nil {
+		m.failSummary(id, task.Transcript, task.TranslatedText, err)
 		return
 	}
 	m.setTaskProgress(id, "completed", 100)
@@ -679,49 +831,6 @@ func (m *Manager) persistTask(id string) {
 		return
 	}
 	_ = m.store.SaveTask(task)
-}
-
-func (m *Manager) runSummaryRetry(ctx context.Context, id string) {
-	task, ok := m.GetTask(id)
-	if !ok {
-		return
-	}
-
-	sourceText := task.Transcript
-	if strings.TrimSpace(task.TranslatedText) != "" {
-		sourceText = task.TranslatedText
-	}
-
-	startedAt := time.Now()
-	summary, err := m.summarizer.Summarize(ctx, sourceText, service.SummaryOptions{
-		Title:     task.Name,
-		SourceURL: task.SourceURL,
-		BVID:      source.ExtractBVID(task.SourceURL),
-	})
-	elapsed := durationMilliseconds(startedAt)
-	m.updateTaskMetrics(id, func(metrics *domain.TaskMetrics) {
-		metrics.SummaryDurationMs = elapsed
-	})
-	if err != nil {
-		m.failSummary(id, task.Transcript, task.TranslatedText, err)
-		return
-	}
-
-	m.updateTask(id, func(task *domain.Task) {
-		task.Status = domain.TaskCompleted
-		task.Stage = "completed"
-		task.ProgressPercent = 100
-		task.Summary = summary
-		task.Error = ""
-		task.SummaryError = ""
-	})
-	m.publishTask(id)
-
-	if err := m.autoSaveOutputs(ctx, id); err != nil {
-		m.failSummary(id, task.Transcript, task.TranslatedText, err)
-		return
-	}
-	m.cleanupExpiredArtifacts(24 * time.Hour)
 }
 
 func (m *Manager) transcribeWithCheckpoint(ctx context.Context, task *domain.Task, filename string, data []byte) (string, error) {
@@ -997,9 +1106,14 @@ func (m *Manager) restoreTasks() error {
 		}
 		m.tasks[task.ID] = task
 		if task.Status == domain.TaskQueued || task.Status == domain.TaskRunning {
-			task.Status = domain.TaskQueued
-			task.Stage = "queued"
-			m.enqueue(task.ID)
+			if task.Stage == "pending_summary" {
+				task.Status = domain.TaskRunning
+				m.enqueueSummary(task.ID)
+			} else {
+				task.Status = domain.TaskQueued
+				task.Stage = "queued"
+				m.enqueueProcess(task.ID)
+			}
 		}
 	}
 	return nil

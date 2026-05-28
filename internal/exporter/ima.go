@@ -44,6 +44,8 @@ func (e *IMAExporter) ExportMarkdown(ctx context.Context, task *domain.Task, _ s
 		return domain.ExportResult{Name: e.Name(), Status: "failed"}, fmt.Errorf("ima markdown content is empty")
 	}
 
+	content = buildIMAMetadataPrefix(task) + content
+
 	body := map[string]any{
 		"content_format": 1,
 		"content":        content,
@@ -99,4 +101,31 @@ func (e *IMAExporter) ExportMarkdown(ctx context.Context, task *domain.Task, _ s
 
 	target := strings.TrimSpace(parsed.Data.DocID)
 	return domain.ExportResult{Name: e.Name(), Status: "success", Target: target}, nil
+}
+
+func buildIMAMetadataPrefix(task *domain.Task) string {
+	var lines []string
+	if task.AuthorName != "" {
+		lines = append(lines, "**UP主：** "+task.AuthorName)
+	}
+	if task.SourceURL != "" {
+		lines = append(lines, fmt.Sprintf("**视频链接：** [%s](%s)", task.SourceURL, task.SourceURL))
+	}
+	if task.CollectionName != "" {
+		coll := task.CollectionName
+		if task.CollectionIndex > 0 {
+			coll = fmt.Sprintf("%s（第 %d 集）", coll, task.CollectionIndex)
+		}
+		lines = append(lines, "**合集：** "+coll)
+	}
+	if task.CollectionURL != "" {
+		lines = append(lines, fmt.Sprintf("**合集链接：** [%s](%s)", task.CollectionURL, task.CollectionURL))
+	}
+	if len(task.DomainTags) > 0 {
+		lines = append(lines, "**领域标签：** "+strings.Join(task.DomainTags, " | "))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "---\n" + strings.Join(lines, "\n") + "\n---\n\n"
 }

@@ -88,7 +88,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 		exportersList = append(exportersList, item)
 	}
 
-	manager := pipeline.NewManager(transcriber, translator, summarizer, bilibiliClient, exportersList, events, cfg.AutoSaveResults, cfg.OutputDir, cfg.CheckpointDir, cfg.ChunkSeconds, cfg.ChunkParallelism, cfg.TaskWorkers)
+	manager := pipeline.NewManager(transcriber, translator, summarizer, bilibiliClient, exportersList, events, cfg.AutoSaveResults, cfg.OutputDir, cfg.CheckpointDir, cfg.ChunkSeconds, cfg.ChunkParallelism, cfg.TaskWorkers, cfg.SummaryWorkers)
 	return &Server{cfg: cfg, manager: manager, events: events}, nil
 }
 
@@ -104,6 +104,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/tasks/", s.handleTaskByID)
 	mux.HandleFunc("/callback/tasks/", s.handleTaskStatusCallback)
 	mux.HandleFunc("/api/url-tasks", s.handleURLTasks)
+	mux.HandleFunc("/api/collection-preview", s.handleCollectionPreview)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 	return loggingMiddleware(mux)
@@ -127,6 +128,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"chunkSeconds":       s.cfg.ChunkSeconds,
 		"chunkParallelism":   s.cfg.ChunkParallelism,
 		"taskWorkers":        s.cfg.TaskWorkers,
+		"summaryWorkers":     s.cfg.SummaryWorkers,
 		"notionEnabled":      strings.TrimSpace(s.cfg.NotionToken) != "" && strings.TrimSpace(s.cfg.NotionParentPage) != "",
 		"obsidianEnabled":    strings.TrimSpace(s.cfg.ObsidianVaultDir) != "",
 		"imaEnabled":         strings.TrimSpace(s.cfg.IMAOpenAPIClientID) != "" && strings.TrimSpace(s.cfg.IMAOpenAPIAPIKey) != "",
@@ -231,6 +233,32 @@ func (s *Server) handleURLTasks(w http.ResponseWriter, r *http.Request) {
 		tasks = append(tasks, task)
 	}
 	writeJSON(w, http.StatusAccepted, tasks)
+}
+
+func (s *Server) handleCollectionPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.URL) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("url is required"))
+		return
+	}
+
+	collection, err := s.manager.CollectionPreview(r.Context(), req.URL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, collection)
 }
 
 func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {

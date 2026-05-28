@@ -44,9 +44,9 @@ func (c *Client) Translate(ctx context.Context, input, sourceLanguage string) (s
 	return c.chat(ctx, system, input)
 }
 
-func (c *Client) Summarize(ctx context.Context, transcript string, options service.SummaryOptions) (string, error) {
+func (c *Client) Summarize(ctx context.Context, transcript string, options service.SummaryOptions) (string, []string, error) {
 	if strings.TrimSpace(transcript) == "" {
-		return "", nil
+		return "", nil, nil
 	}
 
 	system := strings.Join([]string{
@@ -57,12 +57,13 @@ func (c *Client) Summarize(ctx context.Context, transcript string, options servi
 		"内容去水：过滤掉视频中的口语废话、语气词和无意义互动，只保留高价值信息。",
 		"必须严格按以下格式输出：",
 		"1. 用一级标题生成一个极具吸引力且点明主旨的主标题。标题下方紧跟这行 Markdown：> 📺 **原视频直达：** [https://www.bilibili.com/video/{{BVID}}](https://www.bilibili.com/video/{{BVID}})。如果没有 BVID，请保留 {{BVID}} 占位符并提醒补充。",
-		"2. 用“核心简介”作为二级标题，写一段约 150 字的文字，概括视频的核心价值以及它解决了什么问题。",
-		"3. 用“逻辑骨架”作为二级标题，使用 mermaid 的 graph TD 绘制一份逻辑图，清晰展示视频的主干流程。",
-		"4. 用“深度复盘”作为二级标题，按照视频逻辑模块继续使用 ## 二级标题分模块总结。每个模块以大段落深度叙事为主，拒绝过度细碎的 1.1.1/1.1.2 分点。若涉及并列关系或步骤，可以在段落内部适当用 1. 2. 或 * 做简短引导，但核心仍是深入的文字解释。",
-		"5. 风格要求：语气要生动风趣，像聪明人在茶余饭后的分享，但结论必须严谨客观。适量加入 Emoji 表情来增强视觉动感,在描述关键逻辑转换或重要结论时，必须配以形象的 Emoji（如 🧠, 🛠️, 💡, ⚠️），并对核心观点、关键术语和金句进行加粗。",
-		"6. 用“极简锐评”作为二级标题，在文末写一段 50 字以内的犀利评价，点出这个视频最大的优点、局限性或终极洞察。",
-		"7. 剔除广告和废话后，必须保持前后逻辑自然衔接，不要让内容出现断层。",
+		"2. 在主标题和原视频直达链接之后，用「领域标签」作为二级标题，在该标题下用一行输出 1-3 个领域标签，格式为：`标签1 | 标签2 | 标签3`。标签应简洁精准，反映视频内容所属的知识领域（如：科技、编程、投资、心理学、历史、商业 等）。",
+		"3. 用「核心简介」作为二级标题，写一段约 150 字的文字，概括视频的核心价值以及它解决了什么问题。",
+		"4. 用「逻辑骨架」作为二级标题，使用 mermaid 的 graph TD 绘制一份逻辑图，清晰展示视频的主干流程。",
+		"5. 用「深度复盘」作为二级标题，按照视频逻辑模块继续使用 ## 二级标题分模块总结。每个模块以大段落深度叙事为主，拒绝过度细碎的 1.1.1/1.1.2 分点。若涉及并列关系或步骤，可以在段落内部适当用 1. 2. 或 * 做简短引导，但核心仍是深入的文字解释。",
+		"6. 风格要求：语气要生动风趣，像聪明人在茶余饭后的分享，但结论必须严谨客观。适量加入 Emoji 表情来增强视觉动感,在描述关键逻辑转换或重要结论时，必须配以形象的 Emoji（如 🧠, 🛠️, 💡, ⚠️），并对核心观点、关键术语和金句进行加粗。",
+		"7. 用「极简锐评」作为二级标题，在文末写一段 50 字以内的犀利评价，点出这个视频最大的优点、局限性或终极洞察。",
+		"8. 剔除广告和废话后，必须保持前后逻辑自然衔接，不要让内容出现断层。",
 		"不要输出多余前言，不要省略任何要求的章节。",
 	}, "\n")
 
@@ -71,6 +72,11 @@ func (c *Client) Summarize(ctx context.Context, transcript string, options servi
 	if strings.TrimSpace(options.Title) != "" {
 		prompt.WriteString("视频标题：")
 		prompt.WriteString(strings.TrimSpace(options.Title))
+		prompt.WriteString("\n")
+	}
+	if strings.TrimSpace(options.AuthorName) != "" {
+		prompt.WriteString("UP主：")
+		prompt.WriteString(strings.TrimSpace(options.AuthorName))
 		prompt.WriteString("\n")
 	}
 	if strings.TrimSpace(options.SourceURL) != "" {
@@ -85,14 +91,26 @@ func (c *Client) Summarize(ctx context.Context, transcript string, options servi
 	} else {
 		prompt.WriteString("BVID：未提供，请在主标题下方的原片链接处保留 {{BVID}} 并提醒补充。\n")
 	}
+	if strings.TrimSpace(options.CollectionName) != "" {
+		prompt.WriteString("所属合集：")
+		prompt.WriteString(strings.TrimSpace(options.CollectionName))
+		prompt.WriteString("\n")
+	}
+	if options.CollectionIndex > 0 {
+		prompt.WriteString("合集序号：第 ")
+		prompt.WriteString(fmt.Sprintf("%d", options.CollectionIndex))
+		prompt.WriteString(" 集\n")
+	}
 	prompt.WriteString("\n待处理字幕内容如下：\n")
 	prompt.WriteString(transcript)
 
 	result, err := c.chat(ctx, system, prompt.String())
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return rewriteSummarySourceLink(result, options.SourceURL, options.BVID), nil
+	result = rewriteSummarySourceLink(result, options.SourceURL, options.BVID)
+	domainTags := extractDomainTags(result)
+	return result, domainTags, nil
 }
 
 var (
@@ -133,6 +151,25 @@ func rewriteSummarySourceLink(summary, sourceURL, bvid string) string {
 		summary = strings.TrimSpace(summary)
 	}
 	return summary
+}
+
+var domainTagPattern = regexp.MustCompile(`(?m)^##\s*领域标签\s*\n\s*(.+)$`)
+
+func extractDomainTags(summary string) []string {
+	matches := domainTagPattern.FindStringSubmatch(summary)
+	if len(matches) < 2 {
+		return nil
+	}
+	raw := strings.TrimSpace(matches[1])
+	parts := strings.Split(raw, "|")
+	var tags []string
+	for _, part := range parts {
+		tag := strings.TrimSpace(part)
+		if tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+	return tags
 }
 
 func canonicalSummarySourceURL(sourceURL, bvid string) string {

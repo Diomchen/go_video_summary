@@ -45,6 +45,9 @@ func (e *NotionExporter) ExportMarkdown(ctx context.Context, task *domain.Task, 
 		title = task.ID
 	}
 
+	children := buildNotionMetadataBlocks(task)
+	children = append(children, markdownToNotionBlocks(markdown)...)
+
 	body := map[string]any{
 		"parent": map[string]any{
 			"type":    "page_id",
@@ -60,7 +63,7 @@ func (e *NotionExporter) ExportMarkdown(ctx context.Context, task *domain.Task, 
 				},
 			},
 		},
-		"children": markdownToNotionBlocks(markdown),
+		"children": children,
 	}
 
 	payload, err := json.Marshal(body)
@@ -156,4 +159,58 @@ func markdownToNotionBlocks(markdown string) []map[string]any {
 
 func orderedListLine(line string) bool {
 	return len(line) > 3 && line[0] >= '0' && line[0] <= '9' && line[1] == '.' && line[2] == ' '
+}
+
+func buildNotionMetadataBlocks(task *domain.Task) []map[string]any {
+	var lines []string
+	if task.AuthorName != "" {
+		lines = append(lines, "UP主："+task.AuthorName)
+	}
+	if task.SourceURL != "" {
+		lines = append(lines, "视频链接："+task.SourceURL)
+	}
+	if task.CollectionName != "" {
+		coll := task.CollectionName
+		if task.CollectionIndex > 0 {
+			coll = fmt.Sprintf("%s（第 %d 集）", coll, task.CollectionIndex)
+		}
+		lines = append(lines, "合集："+coll)
+	}
+	if task.CollectionURL != "" {
+		lines = append(lines, "合集链接："+task.CollectionURL)
+	}
+	if len(task.DomainTags) > 0 {
+		lines = append(lines, "领域标签："+strings.Join(task.DomainTags, " | "))
+	}
+
+	if len(lines) == 0 {
+		return nil
+	}
+
+	blocks := make([]map[string]any, 0, len(lines)+1)
+	blocks = append(blocks, map[string]any{
+		"object": "block",
+		"type":   "divider",
+		"divider": map[string]any{},
+	})
+	for _, line := range lines {
+		blocks = append(blocks, map[string]any{
+			"object": "block",
+			"type":   "paragraph",
+			"paragraph": map[string]any{
+				"rich_text": []map[string]any{
+					{
+						"type": "text",
+						"text": map[string]string{"content": line},
+					},
+				},
+			},
+		})
+	}
+	blocks = append(blocks, map[string]any{
+		"object": "block",
+		"type":   "divider",
+		"divider": map[string]any{},
+	})
+	return blocks
 }

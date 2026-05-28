@@ -56,6 +56,12 @@ function formatDurationMs(value) {
   return `${minutes}m ${remainSeconds.toFixed(remainSeconds >= 10 ? 0 : 1)}s`;
 }
 
+function isCollectionURL(url) {
+  return /space\.bilibili\.com\/\d+\/lists\/\d+/.test(url)
+    || /bilibili\.com\/medialist\/play\/\d+/.test(url)
+    || /bilibili\.com\/playlist\/pl\d+/.test(url);
+}
+
 function platformLabel(name) {
   return ({ notion: "Notion", obsidian: "Obsidian", ima: "IMA" })[name] || name;
 }
@@ -207,7 +213,10 @@ function matchesSearch(task, query) {
     task.mode,
     task.originalFileName,
     task.sourceUrl,
-    task.stage
+    task.stage,
+    task.authorName,
+    task.collectionName,
+    (task.domainTags || []).join(" ")
   ].join(" ").toLowerCase();
 
   return text.includes(query);
@@ -237,6 +246,7 @@ function renderHealth() {
     ["模型", healthState.whisperLocalModel || "未配置"],
     ["GPU", healthState.whisperLocalNoGPU ? "禁用" : "启用"],
     ["任务并发", String(healthState.taskWorkers || 0)],
+    ["总结并发", String(healthState.summaryWorkers || 0)],
     ["自动保存", healthState.autoSaveResults ? "开启" : "关闭"],
     ["输出目录", healthState.outputDir || "未配置"],
     ["导出平台", availablePlatformNames().map(platformLabel).join(" / ") || "未配置"]
@@ -445,12 +455,31 @@ function renderMetaLines(task) {
     lines.push(`<div class="meta-line">导出目标：${escapeHtml(task.exportTargets.map(platformLabel).join(" / "))}</div>`);
   }
 
+  if (task.authorName) {
+    lines.push(`<div class="meta-line">UP主：${escapeHtml(task.authorName)}</div>`);
+  }
+
   if (task.sourceUrl) {
     lines.push(`
       <div class="meta-line">
         来源链接：<a href="${escapeHtml(task.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(task.sourceUrl)}</a>
       </div>
     `);
+  }
+
+  if (task.collectionName) {
+    const collText = task.collectionIndex > 0
+      ? `${escapeHtml(task.collectionName)}（第 ${escapeHtml(task.collectionIndex)} 集）`
+      : escapeHtml(task.collectionName);
+    const collLink = task.collectionUrl
+      ? ` <a href="${escapeHtml(task.collectionUrl)}" target="_blank" rel="noreferrer">🔗</a>`
+      : "";
+    lines.push(`<div class="meta-line">合集：${collText}${collLink}</div>`);
+  }
+
+  if (task.domainTags && task.domainTags.length) {
+    const badges = task.domainTags.map((tag) => `<span class="badge">${escapeHtml(tag)}</span>`).join(" ");
+    lines.push(`<div class="meta-line">领域：${badges}</div>`);
   }
 
   if (task.originalFileName) {
@@ -812,10 +841,20 @@ document.getElementById("url-form").addEventListener("submit", async (event) => 
   event.preventDefault();
   const form = event.target;
   const formData = new FormData(form);
+  const urlsText = formData.get("urlsText") || "";
+
+  // Check if any line is a collection URL — if so, trigger preview flow.
+  const lines = urlsText.split("\n").map((l) => l.trim()).filter(Boolean);
+  const collectionURLs = lines.filter(isCollectionURL);
+  if (collectionURLs.length > 0) {
+    await previewCollection(collectionURLs[0], form);
+    return;
+  }
+
   const payload = {
     name: formData.get("name") || "",
     language: formData.get("language") || "",
-    urlsText: formData.get("urlsText") || "",
+    urlsText: urlsText,
     translate: formData.get("translate") === "on",
     summarize: formData.get("summarize") === "on",
     exportTargets: selectedExportTargets(form)
@@ -833,6 +872,125 @@ document.getElementById("url-form").addEventListener("submit", async (event) => 
     rerender();
   } catch (err) {
     alert(err.message);
+  }
+});
+
+// --- Collection Preview ---
+
+let pendingCollectionForm = null;
+let pendingCollectionData = null;
+
+async function previewCollection(url, form) {
+  pendingCollectionForm = form;
+  try {
+    const data = await fetchJSON("/api/collection-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url })
+    });
+    pendingCollectionData = data;
+    showCollectionModal(data);
+  } catch (err) {
+    alert("合集解析失败: " + err.message);
+  }
+}
+
+function showCollectionModal(collection) {
+  const modal = document.getElementById("collection-modal");
+  const title = document.getElementById("collection-modal-title");
+  const meta = document.getElementById("collection-modal-meta");
+  const videoList = document.getElementById("collection-videos");
+  const selectAll = document.getElementById("collection-select-all");
+  const countEl = document.getElementById("collection-selected-count");
+
+  title.textContent = collection.name || "合集预览";
+  const authorText = collection.author ? `UP主: ${collection.author} · ` : "";
+  meta.textContent = `${authorText}共 ${collection.videos.length} 个视频`;
+
+  videoList.innerHTML = collection.videos.map((v) => `
+    <label class="collection-video-item">
+      <input type="checkbox" checked data-bvid="${escapeHtml(v.bvid)}" data-page-url="${escapeHtml(v.pageURL)}">
+      <span class="collection-video-index">${v.index}</span>
+      <span class="collection-video-title" title="${escapeHtml(v.title)}">${escapeHtml(v.title)}</span>
+    </label>
+  `).join("");
+
+  selectAll.checked = true;
+  updateSelectedCount();
+  modal.classList.remove("hidden");
+
+  selectAll.onchange = () => {
+    videoList.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+      cb.checked = selectAll.checked;
+    });
+    updateSelectedCount();
+  };
+
+  videoList.onchange = () => {
+    const checkboxes = videoList.querySelectorAll("input[type=checkbox]");
+    const allChecked = Array.from(checkboxes).every((cb) => cb.checked);
+    selectAll.checked = allChecked;
+    updateSelectedCount();
+  };
+}
+
+function updateSelectedCount() {
+  const videoList = document.getElementById("collection-videos");
+  const countEl = document.getElementById("collection-selected-count");
+  const total = videoList.querySelectorAll("input[type=checkbox]").length;
+  const selected = videoList.querySelectorAll("input[type=checkbox]:checked").length;
+  countEl.textContent = `已选 ${selected} / ${total}`;
+}
+
+function closeCollectionModal() {
+  document.getElementById("collection-modal").classList.add("hidden");
+  pendingCollectionForm = null;
+  pendingCollectionData = null;
+}
+
+async function submitSelectedVideos() {
+  const videoList = document.getElementById("collection-videos");
+  const checkboxes = videoList.querySelectorAll("input[type=checkbox]:checked");
+  const selectedURLs = Array.from(checkboxes).map((cb) => cb.getAttribute("data-page-url"));
+
+  if (selectedURLs.length === 0) {
+    alert("请至少选择一个视频");
+    return;
+  }
+
+  const form = pendingCollectionForm;
+  const formData = new FormData(form);
+  const payload = {
+    name: formData.get("name") || "",
+    language: formData.get("language") || "",
+    urlsText: selectedURLs.join("\n"),
+    translate: formData.get("translate") === "on",
+    summarize: formData.get("summarize") === "on",
+    exportTargets: selectedExportTargets(form)
+  };
+
+  try {
+    const created = await fetchJSON("/api/url-tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    (Array.isArray(created) ? created : [created]).forEach((task) => upsertTask(task));
+    form.reset();
+    closeCollectionModal();
+    setView("tasks");
+    rerender();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+document.getElementById("collection-modal-close").addEventListener("click", closeCollectionModal);
+document.getElementById("collection-modal-cancel").addEventListener("click", closeCollectionModal);
+document.getElementById("collection-modal-confirm").addEventListener("click", submitSelectedVideos);
+document.getElementById("collection-modal").addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) {
+    closeCollectionModal();
   }
 });
 

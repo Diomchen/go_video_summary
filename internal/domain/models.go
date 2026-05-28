@@ -56,6 +56,14 @@ type Task struct {
 	CheckpointDir    string         `json:"checkpointDir,omitempty"`
 	InputFilePath    string         `json:"inputFilePath,omitempty"`
 	SummaryError     string         `json:"summaryError,omitempty"`
+	PendingSummary   bool           `json:"pendingSummary,omitempty"`
+
+	// Collection metadata (for Bilibili season/collection videos)
+	CollectionName  string   `json:"collectionName,omitempty"`
+	CollectionURL   string   `json:"collectionUrl,omitempty"`
+	CollectionIndex int      `json:"collectionIndex,omitempty"`
+	AuthorName      string   `json:"authorName,omitempty"`
+	DomainTags      []string `json:"domainTags,omitempty"`
 }
 
 type ExportResult struct {

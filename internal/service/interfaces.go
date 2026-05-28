@@ -20,11 +20,14 @@ type Translator interface {
 }
 
 type SummaryOptions struct {
-	Title     string
-	SourceURL string
-	BVID      string
+	Title           string
+	SourceURL       string
+	BVID            string
+	CollectionName  string
+	CollectionIndex int
+	AuthorName      string
 }
 
 type Summarizer interface {
-	Summarize(ctx context.Context, transcript string, options SummaryOptions) (string, error)
+	Summarize(ctx context.Context, transcript string, options SummaryOptions) (summary string, domainTags []string, err error)
 }
