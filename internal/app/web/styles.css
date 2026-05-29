@@ -1126,6 +1126,34 @@ code {
   font-weight: 700;
 }
 
+.login-modal {
+  width: min(420px, calc(100% - 32px));
+}
+
+.login-modal-body {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-4);
+}
+
+.qr-box {
+  display: grid;
+  place-items: center;
+  width: 240px;
+  max-width: 100%;
+  aspect-ratio: 1;
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-soft);
+  background: #fff;
+}
+
+.qr-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 @media (max-width: 560px) {
   .topbar-actions,
   .task-toolbar-actions,

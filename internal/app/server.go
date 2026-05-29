@@ -77,6 +77,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 	}
 
 	bilibiliClient := source.NewBilibiliClient(cfg.BilibiliUserAgent, cfg.BilibiliTimeout)
+	bilibiliClient.UseCookieCache(cfg.BilibiliCookieCache, cfg.BilibiliCookieTTL)
 	var exportersList []exporter.MarkdownExporter
 	if item := exporter.NewNotionExporter(cfg.NotionToken, cfg.NotionVersion, cfg.NotionParentPage); item != nil {
 		exportersList = append(exportersList, item)
@@ -105,6 +106,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/callback/tasks/", s.handleTaskStatusCallback)
 	mux.HandleFunc("/api/url-tasks", s.handleURLTasks)
 	mux.HandleFunc("/api/collection-preview", s.handleCollectionPreview)
+	mux.HandleFunc("/api/bilibili/login/status", s.handleBilibiliLoginStatus)
+	mux.HandleFunc("/api/bilibili/login/qrcode", s.handleBilibiliLoginQRCode)
+	mux.HandleFunc("/api/bilibili/login/poll", s.handleBilibiliLoginPoll)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 	return loggingMiddleware(mux)
@@ -129,6 +133,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"chunkParallelism":   s.cfg.ChunkParallelism,
 		"taskWorkers":        s.cfg.TaskWorkers,
 		"summaryWorkers":     s.cfg.SummaryWorkers,
+		"bilibiliLoggedIn":   s.manager.BilibiliLoginStatus()["loggedIn"],
 		"notionEnabled":      strings.TrimSpace(s.cfg.NotionToken) != "" && strings.TrimSpace(s.cfg.NotionParentPage) != "",
 		"obsidianEnabled":    strings.TrimSpace(s.cfg.ObsidianVaultDir) != "",
 		"imaEnabled":         strings.TrimSpace(s.cfg.IMAOpenAPIClientID) != "" && strings.TrimSpace(s.cfg.IMAOpenAPIAPIKey) != "",
@@ -229,8 +234,14 @@ func (s *Server) handleURLTasks(w http.ResponseWriter, r *http.Request) {
 	language := firstNonEmpty(req.Language, s.cfg.WhisperLanguage)
 	tasks := make([]any, 0, len(urls))
 	for _, rawURL := range urls {
-		task := s.manager.CreateURLTask(req.Name, rawURL, language, req.Translate, req.Summarize, normalizeTargets(req.ExportTargets))
-		tasks = append(tasks, task)
+		created, err := s.manager.CreateURLTasksFromInput(req.Name, rawURL, language, req.Translate, req.Summarize, normalizeTargets(req.ExportTargets))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		for _, task := range created {
+			tasks = append(tasks, task)
+		}
 	}
 	writeJSON(w, http.StatusAccepted, tasks)
 }
@@ -259,6 +270,47 @@ func (s *Server) handleCollectionPreview(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, collection)
+}
+
+func (s *Server) handleBilibiliLoginStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.manager.BilibiliLoginStatus())
+}
+
+func (s *Server) handleBilibiliLoginQRCode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	login, err := s.manager.StartBilibiliLogin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, login)
+}
+
+func (s *Server) handleBilibiliLoginPoll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		QRCodeKey string `json:"qrcodeKey"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.manager.PollBilibiliLogin(r.Context(), req.QRCodeKey)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {

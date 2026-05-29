@@ -298,6 +298,24 @@
     </div>
   </div>
 
+  <div id="bilibili-login-modal" class="modal-overlay hidden">
+    <div class="modal login-modal">
+      <div class="modal-header">
+        <h3>B 站扫码登录</h3>
+        <button type="button" class="ghost-btn modal-close" id="bilibili-login-close">&times;</button>
+      </div>
+      <div class="modal-body login-modal-body">
+        <div class="qr-box">
+          <img id="bilibili-login-qr" alt="B 站登录二维码">
+        </div>
+        <p id="bilibili-login-status" class="modal-meta">请使用哔哩哔哩 App 扫码登录。</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="ghost-btn" id="bilibili-login-cancel">取消</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>

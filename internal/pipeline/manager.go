@@ -72,8 +72,8 @@ type Manager struct {
 	store            *TaskStore
 	chunkSeconds     int
 	chunkParallelism int
-	processJobs chan taskJob
-	summaryJobs chan taskJob
+	processJobs      chan taskJob
+	summaryJobs      chan taskJob
 
 	mu    sync.RWMutex
 	tasks map[string]*domain.Task
@@ -164,6 +164,13 @@ func (m *Manager) CreateURLTask(name, rawURL, language string, translate, summar
 	return task
 }
 
+func (m *Manager) CreateURLTasksFromInput(name, rawURL, language string, translate, summarize bool, exportTargets []string) ([]*domain.Task, error) {
+	if source.IsCollectionURL(rawURL) {
+		return m.CreateCollectionTasks(rawURL, language, translate, summarize, exportTargets)
+	}
+	return []*domain.Task{m.CreateURLTask(name, rawURL, language, translate, summarize, exportTargets)}, nil
+}
+
 func (m *Manager) CreateURLTaskWithMeta(name, rawURL, language string, translate, summarize bool, exportTargets []string, collectionName, collectionURL, authorName string, collectionIndex int) *domain.Task {
 	task := m.CreateURLTask(name, rawURL, language, translate, summarize, exportTargets)
 	if collectionName != "" || authorName != "" || collectionIndex > 0 {
@@ -207,10 +214,10 @@ func (m *Manager) CreateCollectionTasks(rawURL, language string, translate, summ
 }
 
 type CollectionPreviewResponse struct {
-	Name   string                    `json:"name"`
-	URL    string                    `json:"url"`
-	Author string                    `json:"author"`
-	Videos []CollectionPreviewVideo  `json:"videos"`
+	Name   string                   `json:"name"`
+	URL    string                   `json:"url"`
+	Author string                   `json:"author"`
+	Videos []CollectionPreviewVideo `json:"videos"`
 }
 
 type CollectionPreviewVideo struct {
@@ -243,6 +250,24 @@ func (m *Manager) CollectionPreview(ctx context.Context, rawURL string) (*Collec
 		Author: collection.Author,
 		Videos: videos,
 	}, nil
+}
+
+func (m *Manager) BilibiliLoginStatus() map[string]bool {
+	return map[string]bool{"loggedIn": m.bilibili != nil && m.bilibili.CachedLoginValid()}
+}
+
+func (m *Manager) StartBilibiliLogin(ctx context.Context) (*source.BilibiliQRCodeLogin, error) {
+	if m.bilibili == nil {
+		return nil, fmt.Errorf("bilibili resolver is not configured")
+	}
+	return m.bilibili.StartQRCodeLogin(ctx)
+}
+
+func (m *Manager) PollBilibiliLogin(ctx context.Context, qrcodeKey string) (*source.BilibiliQRCodePollResult, error) {
+	if m.bilibili == nil {
+		return nil, fmt.Errorf("bilibili resolver is not configured")
+	}
+	return m.bilibili.PollQRCodeLogin(ctx, qrcodeKey)
 }
 
 func (m *Manager) enqueueProcess(id string) {

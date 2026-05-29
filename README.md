@@ -4,11 +4,12 @@
 
 1. 本地音视频文件批量上传
 2. 哔哩哔哩视频链接批量解析，一行一个链接
-3. 按队列顺序执行，支持任务断点续跑
-4. 支持 faster-whisper、本地 Whisper 与 OpenAI Whisper
-5. 可选 LLM 翻译与 Markdown 总结
-6. 总结结果可自动导入 Notion、Obsidian、IMA
-7. 总结失败后可单独重试，不必重新跑 Whisper
+3. 哔哩哔哩稍后再看列表扫码登录解析
+4. 按队列顺序执行，支持任务断点续跑
+5. 支持 faster-whisper、本地 Whisper 与 OpenAI Whisper
+6. 可选 LLM 翻译与 Markdown 总结
+7. 总结结果可自动导入 Notion、Obsidian、IMA
+8. 总结失败后可单独重试，不必重新跑 Whisper
 
 ## 运行展示
 ![](https://cdn.jsdelivr.net/gh/Diomchen/pic2.0@main/img/20260525181031319.png)
@@ -61,6 +62,8 @@ OUTPUT_DIR=outputs
 CHECKPOINT_DIR=outputs/_checkpoints
 CHUNK_SECONDS=45
 CHUNK_PARALLELISM=2
+BILIBILI_COOKIE_CACHE=outputs/_checkpoints/bilibili_cookie.json
+BILIBILI_COOKIE_TTL=720h
 
 NOTION_TOKEN=
 NOTION_PARENT_PAGE_ID=
@@ -85,6 +88,8 @@ IMA_OPENAPI_FOLDER_ID=
 - `CHECKPOINT_DIR`：断点续跑状态、任务元数据和中间文本的保存目录。
 - `CHUNK_SECONDS=45`：每 45 秒切一块，块越小越利于恢复，但任务会更碎。
 - `CHUNK_PARALLELISM=2`：单任务内 chunk 并发数；faster-whisper 常驻 worker 下建议先从 `2` 开始试，再升到 `3`。
+- `BILIBILI_COOKIE_CACHE`：B 站扫码登录后 cookie 的本地缓存文件，用于解析稍后再看列表。
+- `BILIBILI_COOKIE_TTL=720h`：登录态缓存时长，默认 30 天；过期或接口返回未登录时会重新扫码。
 - `NOTION_PARENT_PAGE_ID`：当前实现为“在指定 Notion 页面下创建子页面”。
 - `OBSIDIAN_VAULT_DIR`：填写你的 Obsidian Vault 根目录，生成的 Markdown 会自动写入该库。
 - `IMA_OPENAPI_CLIENTID` 和 `IMA_OPENAPI_APIKEY`：从 [IMA 开放接口页面](https://ima.qq.com/agent-interface) 获取。
@@ -161,6 +166,17 @@ go run ./cmd/subtitle-whisper
   ]
 }
 ```
+
+提交稍后再看列表链接时也走同一接口：
+
+```json
+{
+  "urlsText": "https://www.bilibili.com/watchlater/list#/list",
+  "summarize": true
+}
+```
+
+Web 页面会在首次使用或登录态过期时弹出 B 站扫码登录框。登录成功后 cookie 会缓存在 `BILIBILI_COOKIE_CACHE`，默认 30 天内不重复登录。
 
 ### 3. 查询任务
 

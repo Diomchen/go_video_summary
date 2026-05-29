@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -14,6 +15,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 type BilibiliMedia struct {
@@ -37,15 +40,24 @@ type BilibiliCollection struct {
 }
 
 type BilibiliClient struct {
-	httpClient *http.Client
-	userAgent  string
+	httpClient      *http.Client
+	userAgent       string
+	apiBaseURL      string
+	passportBaseURL string
+	cookieCache     *BilibiliCookieCache
 }
 
 func NewBilibiliClient(userAgent string, timeout time.Duration) *BilibiliClient {
 	return &BilibiliClient{
-		httpClient: &http.Client{Timeout: timeout},
-		userAgent:  userAgent,
+		httpClient:      &http.Client{Timeout: timeout},
+		userAgent:       userAgent,
+		apiBaseURL:      "https://api.bilibili.com",
+		passportBaseURL: "https://passport.bilibili.com",
 	}
+}
+
+func (c *BilibiliClient) UseCookieCache(path string, ttl time.Duration) {
+	c.cookieCache = NewBilibiliCookieCache(path, ttl)
 }
 
 func (c *BilibiliClient) Resolve(ctx context.Context, rawURL string) (*BilibiliMedia, error) {
@@ -136,7 +148,7 @@ func selectBestAudio(playInfo *playInfoResponse) string {
 }
 
 func (c *BilibiliClient) fetchPlayInfoAPI(ctx context.Context, bvid, cid string) (*playInfoResponse, error) {
-	apiURL := fmt.Sprintf("https://api.bilibili.com/x/player/playurl?bvid=%s&cid=%s&fnval=16&qn=64", bvid, cid)
+	apiURL := fmt.Sprintf("%s/x/player/playurl?bvid=%s&cid=%s&fnval=16&qn=64", c.apiBaseURL, bvid, cid)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
@@ -317,7 +329,7 @@ func fetchCidFromAPI(bvid string) (string, error) {
 		return "", err
 	}
 	var result struct {
-		Code int    `json:"code"`
+		Code int `json:"code"`
 		Data struct {
 			Cid int64 `json:"cid"`
 		} `json:"data"`
@@ -444,6 +456,7 @@ var collectionURLPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)space\.bilibili\.com/\d+/lists/\d+`),
 	regexp.MustCompile(`(?i)bilibili\.com/medialist/play/\d+`),
 	regexp.MustCompile(`(?i)bilibili\.com/playlist/pl\d+`),
+	regexp.MustCompile(`(?i)bilibili\.com/watchlater(?:/list)?`),
 }
 
 func IsCollectionURL(rawURL string) bool {
@@ -484,6 +497,10 @@ func extractCollectionIDs(rawURL string) (mid string, seasonID string) {
 }
 
 func (c *BilibiliClient) ResolveCollection(ctx context.Context, rawURL string) (*BilibiliCollection, error) {
+	if IsWatchLaterURL(rawURL) {
+		return c.ResolveWatchLater(ctx, rawURL)
+	}
+
 	mid, seasonID := extractCollectionIDs(rawURL)
 	if seasonID == "" {
 		return nil, fmt.Errorf("cannot extract season id from collection url: %s", rawURL)
@@ -594,6 +611,11 @@ func (c *BilibiliClient) fetchJSON(ctx context.Context, apiURL string) (map[stri
 	}
 	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set("Referer", "https://www.bilibili.com/")
+	if c.cookieCache != nil {
+		if cookie, ok := c.cookieCache.Load(); ok {
+			req.Header.Set("Cookie", cookie)
+		}
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -616,6 +638,270 @@ func (c *BilibiliClient) fetchJSON(ctx context.Context, apiURL string) (map[stri
 		return nil, fmt.Errorf("API error: code=%.0f msg=%s", code, msg)
 	}
 	return result, nil
+}
+
+func IsWatchLaterURL(rawURL string) bool {
+	value := strings.TrimSpace(rawURL)
+	return regexp.MustCompile(`(?i)bilibili\.com/watchlater(?:/list)?`).MatchString(value)
+}
+
+func (c *BilibiliClient) ResolveWatchLater(ctx context.Context, rawURL string) (*BilibiliCollection, error) {
+	apiURL := c.apiBaseURL + "/x/v2/history/toview/web"
+	result, err := c.fetchJSON(ctx, apiURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetch bilibili watchlater list: %w", err)
+	}
+	data, ok := result["data"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("unexpected watchlater API response structure")
+	}
+	items, ok := data["list"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("unexpected watchlater API list structure")
+	}
+
+	videos := make([]BilibiliCollectionVideo, 0, len(items))
+	authorName := ""
+	for _, item := range items {
+		video, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		bvid, _ := video["bvid"].(string)
+		title, _ := video["title"].(string)
+		if bvid == "" {
+			continue
+		}
+		if authorName == "" {
+			if owner, ok := video["owner"].(map[string]any); ok {
+				authorName, _ = owner["name"].(string)
+			}
+		}
+		videos = append(videos, BilibiliCollectionVideo{
+			BVID:    bvid,
+			Title:   title,
+			PageURL: BuildBilibiliVideoURL(bvid),
+		})
+	}
+	if len(videos) == 0 {
+		return nil, fmt.Errorf("no videos found in watchlater list")
+	}
+	return &BilibiliCollection{
+		Name:   "稍后再看",
+		URL:    strings.TrimSpace(rawURL),
+		Author: authorName,
+		Videos: videos,
+	}, nil
+}
+
+type BilibiliCookieCache struct {
+	path string
+	ttl  time.Duration
+}
+
+type bilibiliCookieCacheFile struct {
+	Cookie    string    `json:"cookie"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func NewBilibiliCookieCache(path string, ttl time.Duration) *BilibiliCookieCache {
+	if ttl <= 0 {
+		ttl = 30 * 24 * time.Hour
+	}
+	return &BilibiliCookieCache{path: path, ttl: ttl}
+}
+
+func (c *BilibiliCookieCache) Save(cookie string, createdAt time.Time) error {
+	if c == nil || strings.TrimSpace(c.path) == "" {
+		return nil
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(bilibiliCookieCacheFile{
+		Cookie:    strings.TrimSpace(cookie),
+		CreatedAt: createdAt,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(c.path, data, 0o600)
+}
+
+func (c *BilibiliCookieCache) Load() (string, bool) {
+	if c == nil || strings.TrimSpace(c.path) == "" {
+		return "", false
+	}
+	data, err := os.ReadFile(c.path)
+	if err != nil {
+		return "", false
+	}
+	var cached bilibiliCookieCacheFile
+	if err := json.Unmarshal(data, &cached); err != nil {
+		return "", false
+	}
+	if strings.TrimSpace(cached.Cookie) == "" || time.Since(cached.CreatedAt) > c.ttl {
+		return "", false
+	}
+	return cached.Cookie, true
+}
+
+func (c *BilibiliCookieCache) IsValid() bool {
+	_, ok := c.Load()
+	return ok
+}
+
+type BilibiliQRCodeStatus string
+
+const (
+	BilibiliQRCodeWaiting   BilibiliQRCodeStatus = "waiting"
+	BilibiliQRCodeScanned   BilibiliQRCodeStatus = "scanned"
+	BilibiliQRCodeSucceeded BilibiliQRCodeStatus = "succeeded"
+	BilibiliQRCodeExpired   BilibiliQRCodeStatus = "expired"
+	BilibiliQRCodeFailed    BilibiliQRCodeStatus = "failed"
+)
+
+type BilibiliQRCodeLogin struct {
+	URL           string `json:"url"`
+	QRCodeKey     string `json:"qrcodeKey"`
+	QRCodeDataURL string `json:"qrcodeDataUrl"`
+}
+
+type BilibiliQRCodePollResult struct {
+	Status       BilibiliQRCodeStatus `json:"status"`
+	Message      string               `json:"message,omitempty"`
+	CookieCached bool                 `json:"cookieCached"`
+}
+
+func (c *BilibiliClient) CachedLoginValid() bool {
+	return c.cookieCache != nil && c.cookieCache.IsValid()
+}
+
+func (c *BilibiliClient) StartQRCodeLogin(ctx context.Context) (*BilibiliQRCodeLogin, error) {
+	apiURL := c.passportBaseURL + "/x/passport-login/web/qrcode/generate"
+	result, err := c.fetchPassportJSON(ctx, apiURL)
+	if err != nil {
+		return nil, err
+	}
+	data, ok := result["data"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("unexpected qrcode generate response structure")
+	}
+	qrURL, _ := data["url"].(string)
+	key, _ := data["qrcode_key"].(string)
+	if qrURL == "" || key == "" {
+		return nil, fmt.Errorf("bilibili qrcode generate response missing url or qrcode_key")
+	}
+	png, err := qrcode.Encode(qrURL, qrcode.Medium, 220)
+	if err != nil {
+		return nil, fmt.Errorf("generate qrcode image: %w", err)
+	}
+	return &BilibiliQRCodeLogin{
+		URL:           qrURL,
+		QRCodeKey:     key,
+		QRCodeDataURL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
+	}, nil
+}
+
+func (c *BilibiliClient) PollQRCodeLogin(ctx context.Context, qrcodeKey string) (*BilibiliQRCodePollResult, error) {
+	if strings.TrimSpace(qrcodeKey) == "" {
+		return nil, fmt.Errorf("qrcodeKey is required")
+	}
+	apiURL := c.passportBaseURL + "/x/passport-login/web/qrcode/poll?qrcode_key=" + url.QueryEscape(qrcodeKey)
+	result, resp, err := c.fetchPassportJSONWithResponse(ctx, apiURL)
+	if err != nil {
+		return nil, err
+	}
+	data, ok := result["data"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("unexpected qrcode poll response structure")
+	}
+	codeFloat, _ := data["code"].(float64)
+	message, _ := data["message"].(string)
+	status, done := parseQRCodePollStatus(int(codeFloat))
+	pollResult := &BilibiliQRCodePollResult{
+		Status:       status,
+		Message:      message,
+		CookieCached: c.CachedLoginValid(),
+	}
+	if !done {
+		return pollResult, nil
+	}
+	cookie := cookiesToHeader(resp.Cookies())
+	if cookie == "" {
+		return nil, fmt.Errorf("bilibili qrcode login succeeded but no cookie was returned")
+	}
+	if c.cookieCache != nil {
+		if err := c.cookieCache.Save(cookie, time.Now()); err != nil {
+			return nil, err
+		}
+	}
+	pollResult.CookieCached = true
+	return pollResult, nil
+}
+
+func parseQRCodePollStatus(code int) (BilibiliQRCodeStatus, bool) {
+	switch code {
+	case 0:
+		return BilibiliQRCodeSucceeded, true
+	case 86101:
+		return BilibiliQRCodeWaiting, false
+	case 86090:
+		return BilibiliQRCodeScanned, false
+	case 86038:
+		return BilibiliQRCodeExpired, false
+	default:
+		return BilibiliQRCodeFailed, false
+	}
+}
+
+func (c *BilibiliClient) fetchPassportJSON(ctx context.Context, apiURL string) (map[string]any, error) {
+	result, _, err := c.fetchPassportJSONWithResponse(ctx, apiURL)
+	return result, err
+}
+
+func (c *BilibiliClient) fetchPassportJSONWithResponse(ctx context.Context, apiURL string) (map[string]any, *http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("Referer", "https://www.bilibili.com/")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+	var result map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, nil, fmt.Errorf("parse passport API response: %w", err)
+	}
+	code, _ := result["code"].(float64)
+	if code != 0 {
+		msg, _ := result["message"].(string)
+		return nil, nil, fmt.Errorf("passport API error: code=%.0f msg=%s", code, msg)
+	}
+	return result, resp, nil
+}
+
+func cookiesToHeader(cookies []*http.Cookie) string {
+	values := make([]string, 0, len(cookies))
+	for _, cookie := range cookies {
+		if cookie == nil || strings.TrimSpace(cookie.Name) == "" {
+			continue
+		}
+		values = append(values, cookie.Name+"="+cookie.Value)
+	}
+	return strings.Join(values, "; ")
 }
 
 func ExtractBVID(rawURL string) string {

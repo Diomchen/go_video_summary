@@ -17,6 +17,8 @@ let healthState = null;
 let currentFilter = "all";
 let currentSearch = "";
 let currentView = "status";
+let bilibiliLoginPollTimer = null;
+let pendingAfterLogin = null;
 
 async function fetchJSON(url, options) {
   const resp = await fetch(url, options);
@@ -59,7 +61,12 @@ function formatDurationMs(value) {
 function isCollectionURL(url) {
   return /space\.bilibili\.com\/\d+\/lists\/\d+/.test(url)
     || /bilibili\.com\/medialist\/play\/\d+/.test(url)
-    || /bilibili\.com\/playlist\/pl\d+/.test(url);
+    || /bilibili\.com\/playlist\/pl\d+/.test(url)
+    || /bilibili\.com\/watchlater(?:\/list)?/.test(url);
+}
+
+function isWatchLaterURL(url) {
+  return /bilibili\.com\/watchlater(?:\/list)?/.test(url);
 }
 
 function platformLabel(name) {
@@ -881,6 +888,13 @@ let pendingCollectionForm = null;
 let pendingCollectionData = null;
 
 async function previewCollection(url, form) {
+  if (isWatchLaterURL(url)) {
+    const loggedIn = await ensureBilibiliLogin(() => previewCollection(url, form));
+    if (!loggedIn) {
+      return;
+    }
+  }
+
   pendingCollectionForm = form;
   try {
     const data = await fetchJSON("/api/collection-preview", {
@@ -891,7 +905,99 @@ async function previewCollection(url, form) {
     pendingCollectionData = data;
     showCollectionModal(data);
   } catch (err) {
+    if (isWatchLaterURL(url) && /code=-101|未登录|login/i.test(err.message || "")) {
+      pendingAfterLogin = () => previewCollection(url, form);
+      await openBilibiliLoginModal();
+      return;
+    }
     alert("合集解析失败: " + err.message);
+  }
+}
+
+async function ensureBilibiliLogin(afterLogin) {
+  const status = await fetchJSON("/api/bilibili/login/status");
+  if (status.loggedIn) {
+    return true;
+  }
+  pendingAfterLogin = afterLogin;
+  await openBilibiliLoginModal();
+  return false;
+}
+
+async function openBilibiliLoginModal() {
+  stopBilibiliLoginPoll();
+  const modal = document.getElementById("bilibili-login-modal");
+  const qr = document.getElementById("bilibili-login-qr");
+  const statusEl = document.getElementById("bilibili-login-status");
+  statusEl.textContent = "正在生成二维码...";
+  qr.removeAttribute("src");
+  modal.classList.remove("hidden");
+
+  try {
+    const login = await fetchJSON("/api/bilibili/login/qrcode", { method: "POST" });
+    qr.src = login.qrcodeDataUrl;
+    statusEl.textContent = "请使用哔哩哔哩 App 扫码登录。";
+    startBilibiliLoginPoll(login.qrcodeKey);
+  } catch (err) {
+    statusEl.textContent = `二维码生成失败：${err.message}`;
+  }
+}
+
+function startBilibiliLoginPoll(qrcodeKey) {
+  const statusEl = document.getElementById("bilibili-login-status");
+  const poll = async () => {
+    try {
+      const result = await fetchJSON("/api/bilibili/login/poll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ qrcodeKey })
+      });
+
+      if (result.status === "waiting") {
+        statusEl.textContent = "等待扫码...";
+        return;
+      }
+      if (result.status === "scanned") {
+        statusEl.textContent = "已扫码，请在手机上确认登录。";
+        return;
+      }
+      if (result.status === "expired") {
+        statusEl.textContent = "二维码已过期，请关闭后重新提交。";
+        stopBilibiliLoginPoll();
+        return;
+      }
+      if (result.status === "succeeded") {
+        statusEl.textContent = "登录成功，正在继续解析稍后再看列表...";
+        stopBilibiliLoginPoll();
+        closeBilibiliLoginModal(false);
+        if (typeof pendingAfterLogin === "function") {
+          const resume = pendingAfterLogin;
+          pendingAfterLogin = null;
+          await resume();
+        }
+      }
+    } catch (err) {
+      statusEl.textContent = `登录状态查询失败：${err.message}`;
+      stopBilibiliLoginPoll();
+    }
+  };
+
+  bilibiliLoginPollTimer = window.setInterval(poll, 2000);
+  poll();
+}
+
+function stopBilibiliLoginPoll() {
+  if (bilibiliLoginPollTimer) {
+    window.clearInterval(bilibiliLoginPollTimer);
+    bilibiliLoginPollTimer = null;
+  }
+}
+
+function closeBilibiliLoginModal(clearPending = true) {
+  stopBilibiliLoginPoll();
+  document.getElementById("bilibili-login-modal").classList.add("hidden");
+  if (clearPending) {
+    pendingAfterLogin = null;
   }
 }
 
@@ -991,6 +1097,13 @@ document.getElementById("collection-modal-confirm").addEventListener("click", su
 document.getElementById("collection-modal").addEventListener("click", (event) => {
   if (event.target === event.currentTarget) {
     closeCollectionModal();
+  }
+});
+document.getElementById("bilibili-login-close").addEventListener("click", () => closeBilibiliLoginModal());
+document.getElementById("bilibili-login-cancel").addEventListener("click", () => closeBilibiliLoginModal());
+document.getElementById("bilibili-login-modal").addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) {
+    closeBilibiliLoginModal();
   }
 });
 
