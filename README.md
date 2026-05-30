@@ -8,7 +8,7 @@
 4. 按队列顺序执行，支持任务断点续跑
 5. 支持 faster-whisper、本地 Whisper 与 OpenAI Whisper
 6. 可选 LLM 翻译与 Markdown 总结
-7. 总结结果可自动导入 Notion、Obsidian、IMA
+7. 总结结果可自动导入 Markdown 文件夹、Notion、Obsidian、IMA
 8. 总结失败后可单独重试，不必重新跑 Whisper
 
 ## 运行展示
@@ -31,7 +31,7 @@
   - 每完成一个分块就写入 `transcript.txt` 与 `segments.json`
   - 服务重启后会从已完成分块继续
 - 开启总结后会生成 `.summary.md`
-- 配好 Notion / Obsidian / IMA 后会自动导出 Markdown
+- 配好导出目标后可自动导出到普通 Markdown 文件夹、Notion、Obsidian、IMA
 
 ## 推荐配置
 
@@ -91,7 +91,7 @@ IMA_OPENAPI_FOLDER_ID=
 - `BILIBILI_COOKIE_CACHE`：B 站扫码登录后 cookie 的本地缓存文件，用于解析稍后再看列表。
 - `BILIBILI_COOKIE_TTL=720h`：登录态缓存时长，默认 30 天；过期或接口返回未登录时会重新扫码。
 - `NOTION_PARENT_PAGE_ID`：当前实现为“在指定 Notion 页面下创建子页面”。
-- `OBSIDIAN_VAULT_DIR`：填写你的 Obsidian Vault 根目录，生成的 Markdown 会自动写入该库。
+- `OBSIDIAN_VAULT_DIR`：填写默认 Obsidian Vault 根目录；也可以在 Web 页面为单次任务手动填写 Obsidian 导出目录。
 - `IMA_OPENAPI_CLIENTID` 和 `IMA_OPENAPI_APIKEY`：从 [IMA 开放接口页面](https://ima.qq.com/agent-interface) 获取。
 - `IMA_OPENAPI_FOLDER_ID`：建议默认留空。你已经验证过，把知识库文档目录对应的 `folder_id` 填进去会失败；当前推荐流程是先导入普通笔记，再在 IMA 里手动转存到知识库文档下。
 
@@ -152,7 +152,10 @@ go run ./cmd/subtitle-whisper
   "urlsText": "https://www.bilibili.com/video/BV1xxxxx\nhttps://www.bilibili.com/video/BV2yyyyy",
   "language": "zh",
   "translate": false,
-  "summarize": true
+  "summarize": true,
+  "exportTargets": ["markdown", "obsidian"],
+  "markdownExportDir": "E:\\notes\\whisper",
+  "obsidianExportDir": "E:\\Obsidian\\MyVault\\B站转写"
 }
 ```
 
@@ -177,6 +180,12 @@ go run ./cmd/subtitle-whisper
 ```
 
 Web 页面会在首次使用或登录态过期时弹出 B 站扫码登录框。登录成功后 cookie 会缓存在 `BILIBILI_COOKIE_CACHE`，默认 30 天内不重复登录。
+
+导出说明：
+
+- `markdownExportDir`：勾选 `markdown` 时，把总结 Markdown 写入指定普通文件夹。
+- `obsidianExportDir`：勾选 `obsidian` 时，本次任务优先写入该目录；为空时使用 `.env` 中的 `OBSIDIAN_VAULT_DIR` / `OBSIDIAN_SUBDIR`。
+- Obsidian 导出的 Markdown 会写入 `tags`、`domain_tags`、`up`、`bvid`、`collection` 等 frontmatter，并在正文开头增加 `[[UP/...]]`、`[[领域/...]]`、`[[合集/...]]` 形式的关系链接，方便关系图谱聚合。
 
 ### 3. 查询任务
 

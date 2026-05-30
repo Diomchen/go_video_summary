@@ -612,6 +612,10 @@ textarea {
   gap: var(--space-3);
 }
 
+.export-path-grid {
+  margin-top: var(--space-4);
+}
+
 .export-check.disabled {
   opacity: 0.56;
 }
@@ -1177,4 +1181,22 @@ code {
   .task-card.collapsed {
     padding: var(--space-4);
   }
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-4) 0;
+}
+
+.pagination-controls .ghost-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pagination-info {
+  color: var(--text-muted);
+  font-size: 0.85rem;
 }

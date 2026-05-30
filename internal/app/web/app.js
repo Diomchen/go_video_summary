@@ -20,6 +20,10 @@ let currentView = "status";
 let bilibiliLoginPollTimer = null;
 let pendingAfterLogin = null;
 
+let currentPage = 1;
+const pageSize = 50;
+let renderScheduled = false;
+
 async function fetchJSON(url, options) {
   const resp = await fetch(url, options);
   const data = await resp.json();
@@ -70,7 +74,7 @@ function isWatchLaterURL(url) {
 }
 
 function platformLabel(name) {
-  return ({ notion: "Notion", obsidian: "Obsidian", ima: "IMA" })[name] || name;
+  return ({ markdown: "Markdown", notion: "Notion", obsidian: "Obsidian", ima: "IMA" })[name] || name;
 }
 
 function taskStatusLabel(status) {
@@ -91,17 +95,24 @@ function modeLabel(mode) {
 
 function availablePlatformNames() {
   const platforms = (healthState && healthState.exportPlatforms) || {};
-  return ["notion", "obsidian", "ima"].filter((name) => Boolean(platforms[name]));
+  return ["markdown", "notion", "obsidian", "ima"].filter((name) => Boolean(platforms[name]));
 }
 
 function selectedExportTargets(form) {
   return Array.from(form.querySelectorAll('input[name="exportTarget"]:checked')).map((input) => input.value);
 }
 
+function exportPathOptions(form) {
+  return {
+    markdownExportDir: (form.querySelector('input[name="markdownExportDir"]')?.value || "").trim(),
+    obsidianExportDir: (form.querySelector('input[name="obsidianExportDir"]')?.value || "").trim()
+  };
+}
+
 function renderExportOptions(containerId) {
   const container = document.getElementById(containerId);
   const platforms = (healthState && healthState.exportPlatforms) || {};
-  const names = ["notion", "obsidian", "ima"];
+  const names = ["markdown", "notion", "obsidian", "ima"];
 
   container.innerHTML = names.map((name) => {
     const enabled = Boolean(platforms[name]);
@@ -201,10 +212,25 @@ function shouldAutoExpand(task) {
 }
 
 function upsertTask(task) {
-  const existed = tasks.has(task.id);
-  tasks.set(task.id, task);
-  if (!existed && shouldAutoExpand(task)) {
-    expandedTaskIds.add(task.id);
+  const existing = tasks.get(task.id);
+  if (existing) {
+    // Merge SSE summary fields onto existing full task, preserving heavy fields
+    for (const key of Object.keys(task)) {
+      if (task[key] !== undefined) {
+        existing[key] = task[key];
+      }
+    }
+    // Clear fields that are omitted by Go's omitempty when empty
+    for (const key of ["error", "summaryError"]) {
+      if (!(key in task)) {
+        existing[key] = "";
+      }
+    }
+  } else {
+    tasks.set(task.id, task);
+    if (shouldAutoExpand(task)) {
+      expandedTaskIds.add(task.id);
+    }
   }
 }
 
@@ -462,6 +488,14 @@ function renderMetaLines(task) {
     lines.push(`<div class="meta-line">导出目标：${escapeHtml(task.exportTargets.map(platformLabel).join(" / "))}</div>`);
   }
 
+  if (task.markdownExportDir) {
+    lines.push(`<div class="meta-line">Markdown 导出目录：${escapeHtml(task.markdownExportDir)}</div>`);
+  }
+
+  if (task.obsidianExportDir) {
+    lines.push(`<div class="meta-line">Obsidian 导出目录：${escapeHtml(task.obsidianExportDir)}</div>`);
+  }
+
   if (task.authorName) {
     lines.push(`<div class="meta-line">UP主：${escapeHtml(task.authorName)}</div>`);
   }
@@ -602,13 +636,28 @@ function renderTask(task) {
 function rerenderTasks() {
   const ordered = filteredTasks();
   const total = tasks.size;
+  const totalPages = Math.max(1, Math.ceil(ordered.length / pageSize));
+  if (currentPage > totalPages) currentPage = totalPages;
+  const start = (currentPage - 1) * pageSize;
+  const pageItems = ordered.slice(start, start + pageSize);
 
-  tasksEl.innerHTML = ordered.length
-    ? ordered.map(renderTask).join("")
+  tasksEl.innerHTML = pageItems.length
+    ? pageItems.map(renderTask).join("")
     : '<p class="empty">没有匹配的任务，试试切换筛选或清空搜索。</p>';
 
+  // Pagination controls
+  if (ordered.length > pageSize) {
+    tasksEl.innerHTML += `
+      <div class="pagination-controls">
+        <button class="ghost-btn" data-action="page-prev" ${currentPage <= 1 ? "disabled" : ""}>上一页</button>
+        <span class="pagination-info">第 ${currentPage} / ${totalPages} 页</span>
+        <button class="ghost-btn" data-action="page-next" ${currentPage >= totalPages ? "disabled" : ""}>下一页</button>
+      </div>
+    `;
+  }
+
   taskResultsInfoEl.textContent = total
-    ? `当前显示 ${ordered.length} / ${total} 个任务`
+    ? `当前显示 ${pageItems.length} / ${ordered.length} 个任务（共 ${total} 个）`
     : "暂无任务";
 
   document.querySelectorAll(".filter-chip").forEach((button) => {
@@ -617,6 +666,16 @@ function rerenderTasks() {
 
   if (currentView === "tasks") {
     window.requestAnimationFrame(updateStageHeight);
+  }
+}
+
+function scheduleRerender() {
+  if (!renderScheduled) {
+    renderScheduled = true;
+    requestAnimationFrame(() => {
+      renderScheduled = false;
+      rerender();
+    });
   }
 }
 
@@ -705,15 +764,16 @@ async function handleCopyCurl(button) {
 }
 
 async function loadInitial() {
-  const [health, list] = await Promise.all([
+  const [health, data] = await Promise.all([
     fetchJSON("/api/health"),
-    fetchJSON("/api/tasks")
+    fetchJSON("/api/tasks?page=1&size=200")
   ]);
 
   healthState = health;
   renderHealth();
   renderExportOptions("file-export-options");
   renderExportOptions("url-export-options");
+  const list = Array.isArray(data) ? data : (data.tasks || []);
   list.forEach((task) => upsertTask(task));
   rerender();
 }
@@ -725,12 +785,12 @@ function attachEvents() {
     if (data.type === "task.deleted" && data.taskId) {
       tasks.delete(data.taskId);
       expandedTaskIds.delete(data.taskId);
-      rerender();
+      scheduleRerender();
       return;
     }
     if (data.payload && data.payload.id) {
       upsertTask(data.payload);
-      rerender();
+      scheduleRerender();
     }
   };
 
@@ -744,6 +804,7 @@ function attachEvents() {
 
   taskSearchEl.addEventListener("input", (event) => {
     currentSearch = event.target.value || "";
+    currentPage = 1;
     rerenderTasks();
   });
 
@@ -783,6 +844,7 @@ function attachEvents() {
     const filterButton = event.target.closest(".filter-chip");
     if (filterButton) {
       currentFilter = filterButton.getAttribute("data-filter") || "all";
+      currentPage = 1;
       rerenderTasks();
       return;
     }
@@ -801,6 +863,16 @@ function attachEvents() {
       } else {
         expandedTaskIds.add(taskId);
       }
+      rerenderTasks();
+      return;
+    }
+
+    if (action === "page-prev") {
+      if (currentPage > 1) { currentPage--; rerenderTasks(); }
+      return;
+    }
+    if (action === "page-next") {
+      currentPage++;
       rerenderTasks();
       return;
     }
@@ -864,7 +936,8 @@ document.getElementById("url-form").addEventListener("submit", async (event) => 
     urlsText: urlsText,
     translate: formData.get("translate") === "on",
     summarize: formData.get("summarize") === "on",
-    exportTargets: selectedExportTargets(form)
+    exportTargets: selectedExportTargets(form),
+    ...exportPathOptions(form)
   };
 
   try {
@@ -1072,7 +1145,8 @@ async function submitSelectedVideos() {
     urlsText: selectedURLs.join("\n"),
     translate: formData.get("translate") === "on",
     summarize: formData.get("summarize") === "on",
-    exportTargets: selectedExportTargets(form)
+    exportTargets: selectedExportTargets(form),
+    ...exportPathOptions(form)
   };
 
   try {

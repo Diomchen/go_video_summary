@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,13 +32,15 @@ type Server struct {
 }
 
 type urlTaskRequest struct {
-	Name          string   `json:"name"`
-	URLs          []string `json:"urls"`
-	URLsText      string   `json:"urlsText"`
-	Language      string   `json:"language"`
-	Translate     bool     `json:"translate"`
-	Summarize     bool     `json:"summarize"`
-	ExportTargets []string `json:"exportTargets"`
+	Name              string   `json:"name"`
+	URLs              []string `json:"urls"`
+	URLsText          string   `json:"urlsText"`
+	Language          string   `json:"language"`
+	Translate         bool     `json:"translate"`
+	Summarize         bool     `json:"summarize"`
+	ExportTargets     []string `json:"exportTargets"`
+	MarkdownExportDir string   `json:"markdownExportDir"`
+	ObsidianExportDir string   `json:"obsidianExportDir"`
 }
 
 type exportRetryRequest struct {
@@ -139,7 +142,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"imaEnabled":         strings.TrimSpace(s.cfg.IMAOpenAPIClientID) != "" && strings.TrimSpace(s.cfg.IMAOpenAPIAPIKey) != "",
 		"exportPlatforms": map[string]bool{
 			"notion":   strings.TrimSpace(s.cfg.NotionToken) != "" && strings.TrimSpace(s.cfg.NotionParentPage) != "",
-			"obsidian": strings.TrimSpace(s.cfg.ObsidianVaultDir) != "",
+			"markdown": true,
+			"obsidian": true,
 			"ima":      strings.TrimSpace(s.cfg.IMAOpenAPIClientID) != "" && strings.TrimSpace(s.cfg.IMAOpenAPIAPIKey) != "",
 		},
 	})
@@ -148,7 +152,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.manager.ListTasks())
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+		writeJSON(w, http.StatusOK, s.manager.ListTasksPaged(page, size))
 	case http.MethodPost:
 		if err := r.ParseMultipartForm(1024 << 20); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -166,6 +172,11 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		summarize := parseBool(r.FormValue("summarize"))
 		namePrefix := strings.TrimSpace(r.FormValue("name"))
 		exportTargets := normalizeTargets(r.MultipartForm.Value["exportTarget"])
+		exportOptions := pipeline.ExportOptions{
+			Targets:           exportTargets,
+			MarkdownExportDir: strings.TrimSpace(r.FormValue("markdownExportDir")),
+			ObsidianExportDir: strings.TrimSpace(r.FormValue("obsidianExportDir")),
+		}
 
 		tasks := make([]any, 0, len(files))
 		for _, header := range files {
@@ -185,8 +196,8 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			if namePrefix != "" {
 				name = fmt.Sprintf("%s - %s", namePrefix, header.Filename)
 			}
-			task := s.manager.CreateFileTask(name, header.Filename, data, language, translate, summarize, exportTargets)
-			tasks = append(tasks, task)
+			task := s.manager.CreateFileTask(name, header.Filename, data, language, translate, summarize, exportOptions)
+			tasks = append(tasks, pipeline.ToTaskSummary(task))
 		}
 
 		writeJSON(w, http.StatusAccepted, tasks)
@@ -232,15 +243,20 @@ func (s *Server) handleURLTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	language := firstNonEmpty(req.Language, s.cfg.WhisperLanguage)
+	exportOptions := pipeline.ExportOptions{
+		Targets:           normalizeTargets(req.ExportTargets),
+		MarkdownExportDir: strings.TrimSpace(req.MarkdownExportDir),
+		ObsidianExportDir: strings.TrimSpace(req.ObsidianExportDir),
+	}
 	tasks := make([]any, 0, len(urls))
 	for _, rawURL := range urls {
-		created, err := s.manager.CreateURLTasksFromInput(req.Name, rawURL, language, req.Translate, req.Summarize, normalizeTargets(req.ExportTargets))
+		created, err := s.manager.CreateURLTasksFromInput(req.Name, rawURL, language, req.Translate, req.Summarize, exportOptions)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
 		for _, task := range created {
-			tasks = append(tasks, task)
+			tasks = append(tasks, pipeline.ToTaskSummary(task))
 		}
 	}
 	writeJSON(w, http.StatusAccepted, tasks)
