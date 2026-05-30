@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -144,12 +145,20 @@ func NewManager(transcriber service.Transcriber, translator service.Translator, 
 	return m
 }
 
-func (m *Manager) CreateFileTask(name, filename string, data []byte, language string, translate, summarize bool, exportTargets []string) *domain.Task {
+type ExportOptions struct {
+	Targets           []string
+	MarkdownExportDir string
+	ObsidianExportDir string
+}
+
+func (m *Manager) CreateFileTask(name, filename string, data []byte, language string, translate, summarize bool, exportOptions ExportOptions) *domain.Task {
 	task := m.newTask(name, "file", language, translate, summarize)
 	task.OriginalFileName = filepath.Base(filename)
 	task.CheckpointDir = m.store.TaskDir(task.ID)
 	task.InputFilePath = m.store.InputPath(task.ID, filename)
-	task.ExportTargets = m.normalizeExportTargets(exportTargets)
+	task.MarkdownExportDir = strings.TrimSpace(exportOptions.MarkdownExportDir)
+	task.ObsidianExportDir = strings.TrimSpace(exportOptions.ObsidianExportDir)
+	task.ExportTargets = m.normalizeExportTargets(exportOptions.Targets, task)
 	task.Exports = defaultExports(task.ExportTargets)
 	m.saveTask(task)
 	if err := os.MkdirAll(task.CheckpointDir, 0o755); err == nil {
@@ -160,7 +169,7 @@ func (m *Manager) CreateFileTask(name, filename string, data []byte, language st
 	return task
 }
 
-func (m *Manager) CreateURLTask(name, rawURL, language string, translate, summarize bool, exportTargets []string) *domain.Task {
+func (m *Manager) CreateURLTask(name, rawURL, language string, translate, summarize bool, exportOptions ExportOptions) *domain.Task {
 	displayName := strings.TrimSpace(name)
 	if displayName == "" {
 		displayName = strings.TrimSpace(rawURL)
@@ -168,7 +177,9 @@ func (m *Manager) CreateURLTask(name, rawURL, language string, translate, summar
 	task := m.newTask(displayName, "url", language, translate, summarize)
 	task.SourceURL = strings.TrimSpace(rawURL)
 	task.CheckpointDir = m.store.TaskDir(task.ID)
-	task.ExportTargets = m.normalizeExportTargets(exportTargets)
+	task.MarkdownExportDir = strings.TrimSpace(exportOptions.MarkdownExportDir)
+	task.ObsidianExportDir = strings.TrimSpace(exportOptions.ObsidianExportDir)
+	task.ExportTargets = m.normalizeExportTargets(exportOptions.Targets, task)
 	task.Exports = defaultExports(task.ExportTargets)
 	m.saveTask(task)
 	m.persistTask(task.ID)
@@ -176,15 +187,15 @@ func (m *Manager) CreateURLTask(name, rawURL, language string, translate, summar
 	return task
 }
 
-func (m *Manager) CreateURLTasksFromInput(name, rawURL, language string, translate, summarize bool, exportTargets []string) ([]*domain.Task, error) {
+func (m *Manager) CreateURLTasksFromInput(name, rawURL, language string, translate, summarize bool, exportOptions ExportOptions) ([]*domain.Task, error) {
 	if source.IsCollectionURL(rawURL) {
-		return m.CreateCollectionTasks(rawURL, language, translate, summarize, exportTargets)
+		return m.CreateCollectionTasks(rawURL, language, translate, summarize, exportOptions)
 	}
-	return []*domain.Task{m.CreateURLTask(name, rawURL, language, translate, summarize, exportTargets)}, nil
+	return []*domain.Task{m.CreateURLTask(name, rawURL, language, translate, summarize, exportOptions)}, nil
 }
 
-func (m *Manager) CreateURLTaskWithMeta(name, rawURL, language string, translate, summarize bool, exportTargets []string, collectionName, collectionURL, authorName string, collectionIndex int) *domain.Task {
-	task := m.CreateURLTask(name, rawURL, language, translate, summarize, exportTargets)
+func (m *Manager) CreateURLTaskWithMeta(name, rawURL, language string, translate, summarize bool, exportOptions ExportOptions, collectionName, collectionURL, authorName string, collectionIndex int) *domain.Task {
+	task := m.CreateURLTask(name, rawURL, language, translate, summarize, exportOptions)
 	if collectionName != "" || authorName != "" || collectionIndex > 0 {
 		m.updateTask(task.ID, func(t *domain.Task) {
 			t.CollectionName = collectionName
@@ -197,7 +208,7 @@ func (m *Manager) CreateURLTaskWithMeta(name, rawURL, language string, translate
 	return task
 }
 
-func (m *Manager) CreateCollectionTasks(rawURL, language string, translate, summarize bool, exportTargets []string) ([]*domain.Task, error) {
+func (m *Manager) CreateCollectionTasks(rawURL, language string, translate, summarize bool, exportOptions ExportOptions) ([]*domain.Task, error) {
 	if m.bilibili == nil {
 		return nil, fmt.Errorf("bilibili resolver is not configured")
 	}
@@ -214,7 +225,7 @@ func (m *Manager) CreateCollectionTasks(rawURL, language string, translate, summ
 			language,
 			translate,
 			summarize,
-			exportTargets,
+			exportOptions,
 			collection.Name,
 			collection.URL,
 			collection.Author,
@@ -338,6 +349,47 @@ func (m *Manager) ListTasks() []*domain.Task {
 	return tasks
 }
 
+func (m *Manager) ListTasksPaged(page, pageSize int) domain.PaginatedTasks {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+
+	m.mu.RLock()
+	all := make([]*domain.Task, 0, len(m.tasks))
+	for _, task := range m.tasks {
+		cloned := cloneTask(task)
+		all = append(all, &cloned)
+	}
+	m.mu.RUnlock()
+
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].UpdatedAt.After(all[j].UpdatedAt)
+	})
+
+	total := len(all)
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+
+	return domain.PaginatedTasks{
+		Tasks:    all[start:end],
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}
+}
+
 func (m *Manager) GetTaskStatusCallback(id string) (*domain.TaskStatusCallback, bool) {
 	task, ok := m.GetTask(id)
 	if !ok {
@@ -441,12 +493,73 @@ func (m *Manager) newTask(name, mode, language string, translate, summarize bool
 	}
 }
 
+func ToTaskSummary(task *domain.Task) domain.TaskSummary {
+	var exports []domain.ExportResult
+	if task.Exports != nil {
+		exports = make([]domain.ExportResult, len(task.Exports))
+		copy(exports, task.Exports)
+	}
+	var savedFiles []string
+	if task.SavedFiles != nil {
+		savedFiles = make([]string, len(task.SavedFiles))
+		copy(savedFiles, task.SavedFiles)
+	}
+	var exportTargets []string
+	if task.ExportTargets != nil {
+		exportTargets = make([]string, len(task.ExportTargets))
+		copy(exportTargets, task.ExportTargets)
+	}
+	var domainTags []string
+	if task.DomainTags != nil {
+		domainTags = make([]string, len(task.DomainTags))
+		copy(domainTags, task.DomainTags)
+	}
+	var metrics *domain.TaskMetrics
+	if task.Metrics != nil {
+		m := *task.Metrics
+		metrics = &m
+	}
+	return domain.TaskSummary{
+		ID:                task.ID,
+		Name:              task.Name,
+		Mode:              task.Mode,
+		SourceURL:         task.SourceURL,
+		Status:            task.Status,
+		Stage:             task.Stage,
+		ProgressPercent:   task.ProgressPercent,
+		Translation:       task.Translation,
+		SummaryRequested:  task.SummaryRequested,
+		SourceLanguage:    task.SourceLanguage,
+		TotalChunks:       task.TotalChunks,
+		CompletedChunks:   task.CompletedChunks,
+		Summary:           task.Summary,
+		Error:             task.Error,
+		CreatedAt:         task.CreatedAt,
+		UpdatedAt:         task.UpdatedAt,
+		OriginalFileName:  task.OriginalFileName,
+		SavedFiles:        savedFiles,
+		ExportTargets:     exportTargets,
+		MarkdownExportDir: task.MarkdownExportDir,
+		ObsidianExportDir: task.ObsidianExportDir,
+		Exports:           exports,
+		Metrics:           metrics,
+		SummaryError:      task.SummaryError,
+		PendingSummary:    task.PendingSummary,
+		CollectionName:    task.CollectionName,
+		CollectionURL:     task.CollectionURL,
+		CollectionIndex:   task.CollectionIndex,
+		AuthorName:        task.AuthorName,
+		DomainTags:        domainTags,
+		HasTranscript:     strings.TrimSpace(task.Transcript) != "",
+	}
+}
+
 func (m *Manager) saveTask(task *domain.Task) {
 	m.mu.Lock()
 	m.tasks[task.ID] = task
 	m.mu.Unlock()
 	_ = m.store.SaveTask(task)
-	m.events.Publish(domain.Event{Type: "task.created", TaskID: task.ID, Payload: task})
+	m.events.Publish(domain.Event{Type: "task.created", TaskID: task.ID, Payload: ToTaskSummary(task)})
 }
 
 func (m *Manager) updateTask(id string, mut func(*domain.Task)) {
@@ -462,9 +575,15 @@ func (m *Manager) updateTask(id string, mut func(*domain.Task)) {
 }
 
 func (m *Manager) publishTask(id string) {
-	if task, ok := m.GetTask(id); ok {
-		m.events.Publish(domain.Event{Type: "task.updated", TaskID: id, Payload: task})
+	m.mu.RLock()
+	task, ok := m.tasks[id]
+	if !ok {
+		m.mu.RUnlock()
+		return
 	}
+	summary := ToTaskSummary(task)
+	m.mu.RUnlock()
+	m.events.Publish(domain.Event{Type: "task.updated", TaskID: id, Payload: summary})
 }
 
 func (m *Manager) failTask(id string, err error) {
@@ -476,6 +595,7 @@ func (m *Manager) failTask(id string, err error) {
 	})
 	m.markTaskFinished(id, finishedAt)
 	m.publishTask(id)
+	m.cleanupCheckpointArtifacts(id)
 }
 
 func (m *Manager) failSummary(id, transcript, translated string, err error) {
@@ -586,7 +706,7 @@ func (m *Manager) RetryExports(id string, targets []string) (*domain.Task, error
 		return nil, fmt.Errorf("task %s has no summary to export", id)
 	}
 
-	targets = m.normalizeExportTargets(targets)
+	targets = m.normalizeExportTargets(targets, task)
 	if len(targets) == 0 {
 		targets = append([]string(nil), task.ExportTargets...)
 	}
@@ -727,9 +847,7 @@ func (m *Manager) runProcessPipeline(ctx context.Context, id, filename string, d
 		return
 	}
 
-	if task.Mode == "url" {
-		_ = m.cleanupInputFile(id)
-	}
+	m.cleanupCheckpointArtifacts(id)
 
 	translated := ""
 	if task.Translation && m.translator != nil {
@@ -840,6 +958,30 @@ func (m *Manager) cleanupInputFile(id string) error {
 	})
 	m.publishTask(id)
 	return nil
+}
+
+// cleanupCheckpointArtifacts removes intermediate files from the checkpoint directory
+// after a task completes or fails. Keeps task.json, transcript.txt, and segments.json.
+func (m *Manager) cleanupCheckpointArtifacts(id string) {
+	task, ok := m.GetTask(id)
+	if !ok || strings.TrimSpace(task.CheckpointDir) == "" {
+		return
+	}
+	dir := task.CheckpointDir
+
+	// Remove converted WAV and original audio files
+	for _, name := range []string{"input.standard.wav", "input.m4a", "input.mp3", "input.mp4"} {
+		path := filepath.Join(dir, name)
+		_ = os.Remove(path)
+	}
+
+	// Remove chunks directory (per-chunk WAV files and checkpoint JSONs)
+	_ = os.RemoveAll(filepath.Join(dir, "chunks"))
+
+	// Clear the input file path reference
+	m.updateTask(id, func(task *domain.Task) {
+		task.InputFilePath = ""
+	})
 }
 
 func (m *Manager) autoSaveOutputs(ctx context.Context, id string) error {
@@ -1137,7 +1279,7 @@ func (m *Manager) restoreTasks() error {
 		return err
 	}
 	for _, task := range tasks {
-		task.ExportTargets = m.normalizeExportTargets(task.ExportTargets)
+		task.ExportTargets = m.normalizeExportTargets(task.ExportTargets, task)
 		if task.Exports == nil {
 			task.Exports = defaultExports(task.ExportTargets)
 		}
@@ -1286,8 +1428,8 @@ func (m *Manager) exportSummary(ctx context.Context, id string, targets []string
 
 	results := append([]domain.ExportResult(nil), task.Exports...)
 	for _, target := range targets {
-		item, ok := m.exporterByName[target]
-		if !ok || exporter.IsNil(item) {
+		item := m.exporterForTask(target, task)
+		if exporter.IsNil(item) {
 			results = upsertExportResult(results, domain.ExportResult{Name: target, Status: "failed", Error: "exporter not configured"})
 			continue
 		}
@@ -1307,7 +1449,7 @@ func (m *Manager) exportSummary(ctx context.Context, id string, targets []string
 	return nil
 }
 
-func (m *Manager) normalizeExportTargets(targets []string) []string {
+func (m *Manager) normalizeExportTargets(targets []string, task *domain.Task) []string {
 	seen := make(map[string]struct{})
 	out := make([]string, 0, len(targets))
 	for _, target := range targets {
@@ -1315,7 +1457,7 @@ func (m *Manager) normalizeExportTargets(targets []string) []string {
 		if target == "" {
 			continue
 		}
-		if _, ok := m.exporterByName[target]; !ok {
+		if exporter.IsNil(m.exporterForTask(target, task)) {
 			continue
 		}
 		if _, ok := seen[target]; ok {
@@ -1325,6 +1467,21 @@ func (m *Manager) normalizeExportTargets(targets []string) []string {
 		out = append(out, target)
 	}
 	return out
+}
+
+func (m *Manager) exporterForTask(target string, task *domain.Task) exporter.MarkdownExporter {
+	target = strings.ToLower(strings.TrimSpace(target))
+	switch target {
+	case "markdown":
+		if task != nil && strings.TrimSpace(task.MarkdownExportDir) != "" {
+			return exporter.NewMarkdownFolderExporter(task.MarkdownExportDir)
+		}
+	case "obsidian":
+		if task != nil && strings.TrimSpace(task.ObsidianExportDir) != "" {
+			return exporter.NewObsidianExporter(task.ObsidianExportDir, "")
+		}
+	}
+	return m.exporterByName[target]
 }
 
 func upsertExportResult(results []domain.ExportResult, result domain.ExportResult) []domain.ExportResult {
