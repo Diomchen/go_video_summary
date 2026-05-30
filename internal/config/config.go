@@ -45,6 +45,9 @@ type Config struct {
 	IMAOpenAPIClientID  string
 	IMAOpenAPIAPIKey    string
 	IMAOpenAPIFolderID  string
+	APISecret           string
+	MaxUploadMB         int
+	MaxSSESubscribers   int
 }
 
 func LoadFromEnv() Config {
@@ -85,6 +88,9 @@ func LoadFromEnv() Config {
 		IMAOpenAPIClientID:  os.Getenv("IMA_OPENAPI_CLIENTID"),
 		IMAOpenAPIAPIKey:    os.Getenv("IMA_OPENAPI_APIKEY"),
 		IMAOpenAPIFolderID:  os.Getenv("IMA_OPENAPI_FOLDER_ID"),
+		APISecret:           os.Getenv("API_SECRET"),
+		MaxUploadMB:         getIntEnv("MAX_UPLOAD_MB", 512),
+		MaxSSESubscribers:   getIntEnv("MAX_SSE_SUBSCRIBERS", 64),
 	}
 }
 

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -89,6 +91,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 		exportersList = append(exportersList, item)
 	}
 
+	events.SetMaxSubscribers(cfg.MaxSSESubscribers)
 	manager := pipeline.NewManager(transcriber, translator, summarizer, bilibiliClient, exportersList, events, cfg.AutoSaveResults, cfg.OutputDir, cfg.CheckpointDir, cfg.ChunkSeconds, cfg.ChunkParallelism, cfg.TaskWorkers, cfg.SummaryWorkers)
 	return &Server{cfg: cfg, manager: manager, events: events}, nil
 }
@@ -111,32 +114,20 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/bilibili/login/poll", s.handleBilibiliLoginPoll)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
-	return loggingMiddleware(mux)
+
+	var handler http.Handler = mux
+	handler = loggingMiddleware(handler)
+	if secret := strings.TrimSpace(s.cfg.APISecret); secret != "" {
+		handler = apiKeyMiddleware(handler, secret)
+	}
+	return handler
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":                 true,
-		"http":               s.cfg.HTTPAddr,
-		"whisperBackend":     s.cfg.WhisperBackend,
-		"whisper":            s.cfg.WhisperBaseURL,
-		"whisperFasterURL":   s.cfg.WhisperFasterURL,
-		"whisperFasterModel": s.cfg.WhisperFasterModel,
-		"whisperLocalBin":    s.cfg.WhisperLocalBin,
-		"whisperLocalModel":  s.cfg.WhisperLocalModel,
-		"whisperLocalNoGPU":  s.cfg.WhisperLocalNoGPU,
-		"llm":                s.cfg.LLMBaseURL,
-		"autoSaveResults":    s.cfg.AutoSaveResults,
-		"outputDir":          s.cfg.OutputDir,
-		"checkpointDir":      s.cfg.CheckpointDir,
-		"chunkSeconds":       s.cfg.ChunkSeconds,
-		"chunkParallelism":   s.cfg.ChunkParallelism,
-		"taskWorkers":        s.cfg.TaskWorkers,
-		"summaryWorkers":     s.cfg.SummaryWorkers,
-		"bilibiliLoggedIn":   s.manager.BilibiliLoginStatus()["loggedIn"],
-		"notionEnabled":      strings.TrimSpace(s.cfg.NotionToken) != "" && strings.TrimSpace(s.cfg.NotionParentPage) != "",
-		"obsidianEnabled":    strings.TrimSpace(s.cfg.ObsidianVaultDir) != "",
-		"imaEnabled":         strings.TrimSpace(s.cfg.IMAOpenAPIClientID) != "" && strings.TrimSpace(s.cfg.IMAOpenAPIAPIKey) != "",
+		"ok":               true,
+		"whisperBackend":   s.cfg.WhisperBackend,
+		"bilibiliLoggedIn": s.manager.BilibiliLoginStatus()["loggedIn"],
 		"exportPlatforms": map[string]bool{
 			"notion":   strings.TrimSpace(s.cfg.NotionToken) != "" && strings.TrimSpace(s.cfg.NotionParentPage) != "",
 			"obsidian": strings.TrimSpace(s.cfg.ObsidianVaultDir) != "",
@@ -150,7 +141,9 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, s.manager.ListTasks())
 	case http.MethodPost:
-		if err := r.ParseMultipartForm(1024 << 20); err != nil {
+		maxBytes := int64(s.cfg.MaxUploadMB) << 20
+		r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+		if err := r.ParseMultipartForm(maxBytes); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -313,8 +306,19 @@ func (s *Server) handleBilibiliLoginPoll(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, result)
 }
 
+var validTaskID = regexp.MustCompile(`^[a-zA-Z0-9]+$`)
+
 func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
+	baseID := id
+	for _, suffix := range []string{"/generate-summary", "/retry-summary", "/retry-exports"} {
+		baseID = strings.TrimSuffix(baseID, suffix)
+	}
+	if !validTaskID.MatchString(baseID) {
+		writeError(w, http.StatusBadRequest, errors.New("invalid task id"))
+		return
+	}
+
 	if strings.HasSuffix(id, "/generate-summary") {
 		id = strings.TrimSuffix(id, "/generate-summary")
 		if r.Method != http.MethodPost {
@@ -385,7 +389,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ch := s.events.Subscribe()
+	ch, ok := s.events.Subscribe()
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, errors.New("too many SSE connections"))
+		return
+	}
 	defer s.events.Unsubscribe(ch)
 
 	ticker := time.NewTicker(15 * time.Second)
@@ -422,6 +430,10 @@ func (s *Server) handleTaskStatusCallback(w http.ResponseWriter, r *http.Request
 	id = strings.TrimSpace(strings.Trim(id, "/"))
 	if id == "" {
 		writeError(w, http.StatusBadRequest, errors.New("task id is required"))
+		return
+	}
+	if !validTaskID.MatchString(id) {
+		writeError(w, http.StatusBadRequest, errors.New("invalid task id"))
 		return
 	}
 
@@ -485,6 +497,25 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func apiKeyMiddleware(next http.Handler, secret string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || !strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/callback/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		token := r.Header.Get("Authorization")
+		token = strings.TrimPrefix(token, "Bearer ")
+		if token == "" {
+			token = r.URL.Query().Get("token")
+		}
+		if subtle.ConstantTimeCompare([]byte(token), []byte(secret)) != 1 {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
