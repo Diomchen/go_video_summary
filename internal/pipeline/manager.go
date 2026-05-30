@@ -22,20 +22,32 @@ import (
 )
 
 type Broadcaster struct {
-	mu      sync.Mutex
-	clients map[chan domain.Event]struct{}
+	mu             sync.Mutex
+	clients        map[chan domain.Event]struct{}
+	maxSubscribers int
 }
 
 func NewBroadcaster() *Broadcaster {
-	return &Broadcaster{clients: make(map[chan domain.Event]struct{})}
+	return &Broadcaster{clients: make(map[chan domain.Event]struct{}), maxSubscribers: 64}
 }
 
-func (b *Broadcaster) Subscribe() chan domain.Event {
-	ch := make(chan domain.Event, 32)
+func (b *Broadcaster) SetMaxSubscribers(max int) {
+	if max > 0 {
+		b.mu.Lock()
+		b.maxSubscribers = max
+		b.mu.Unlock()
+	}
+}
+
+func (b *Broadcaster) Subscribe() (chan domain.Event, bool) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.maxSubscribers > 0 && len(b.clients) >= b.maxSubscribers {
+		return nil, false
+	}
+	ch := make(chan domain.Event, 32)
 	b.clients[ch] = struct{}{}
-	b.mu.Unlock()
-	return ch
+	return ch, true
 }
 
 func (b *Broadcaster) Unsubscribe(ch chan domain.Event) {

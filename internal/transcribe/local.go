@@ -158,9 +158,14 @@ func ensureGPUPreference(args []string, noGPU bool) []string {
 	return filtered
 }
 
+var validLanguageCode = regexp.MustCompile(`^[a-zA-Z]{2,10}$`)
+
 func languageFlag(language string) string {
 	language = strings.TrimSpace(language)
-	if language == "" {
+	if language == "" || strings.EqualFold(language, "auto") {
+		return ""
+	}
+	if !validLanguageCode.MatchString(language) {
 		return ""
 	}
 	return "-l " + language
