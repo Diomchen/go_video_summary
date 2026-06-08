@@ -59,6 +59,11 @@ type Task struct {
 	InputFilePath    string         `json:"inputFilePath,omitempty"`
 	SummaryError     string         `json:"summaryError,omitempty"`
 	PendingSummary   bool           `json:"pendingSummary,omitempty"`
+	Title            string         `json:"title,omitempty"`
+	SourceLink       string         `json:"sourceLink,omitempty"`
+	UPName           string         `json:"upName,omitempty"`
+	Domain           string         `json:"domain,omitempty"`
+	Tags             []string       `json:"tags,omitempty"`
 
 	// Collection metadata (for Bilibili season/collection videos)
 	CollectionName  string   `json:"collectionName,omitempty"`
@@ -103,6 +108,11 @@ type TaskSummary struct {
 	Metrics          *TaskMetrics   `json:"metrics,omitempty"`
 	SummaryError     string         `json:"summaryError,omitempty"`
 	PendingSummary   bool           `json:"pendingSummary,omitempty"`
+	Title            string         `json:"title,omitempty"`
+	SourceLink       string         `json:"sourceLink,omitempty"`
+	UPName           string         `json:"upName,omitempty"`
+	Domain           string         `json:"domain,omitempty"`
+	Tags             []string       `json:"tags,omitempty"`
 	CollectionName   string         `json:"collectionName,omitempty"`
 	CollectionURL    string         `json:"collectionUrl,omitempty"`
 	CollectionIndex  int            `json:"collectionIndex,omitempty"`
