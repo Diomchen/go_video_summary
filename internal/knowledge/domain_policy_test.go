@@ -54,3 +54,22 @@ func TestNormalizeMapsLearningDomainsToArtificialIntelligence(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeMapsTradingDomainsToInvestment(t *testing.T) {
+	vault := t.TempDir()
+	idx := NewObsidianIndex(vault, "domains.md", "tags.md", 0.82)
+
+	for _, input := range []string{
+		"\u77ed\u7ebf\u4ea4\u6613",
+		"\u80a1\u7968",
+		"\u57fa\u91d1",
+	} {
+		got, err := idx.Normalize(metadata.SummaryMetadata{Domain: input})
+		if err != nil {
+			t.Fatalf("Normalize(%q) error = %v", input, err)
+		}
+		if got.Domain != "\u6295\u8d44" {
+			t.Fatalf("domain for %q = %q, want investment", input, got.Domain)
+		}
+	}
+}

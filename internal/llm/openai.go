@@ -14,6 +14,7 @@ import (
 	"go_subtitle_whisper/internal/metadata"
 	"go_subtitle_whisper/internal/service"
 	"go_subtitle_whisper/internal/source"
+	"go_subtitle_whisper/internal/taxonomy"
 )
 
 type Client struct {
@@ -58,7 +59,7 @@ func (c *Client) Summarize(ctx context.Context, transcript string, options servi
 		"内容去水：过滤掉视频中的口语废话、语气词和无意义互动，只保留高价值信息。",
 		"必须严格按以下格式输出：",
 		"1. 用一级标题生成一个极具吸引力且点明主旨的主标题。标题下方紧跟这行 Markdown：> 📺 **原视频直达：** [https://www.bilibili.com/video/{{BVID}}](https://www.bilibili.com/video/{{BVID}})。如果没有 BVID，请保留 {{BVID}} 占位符并提醒补充。",
-		"2. 在主标题和原视频直达链接之后，用「领域标签」作为二级标题，在该标题下用一行输出 1-3 个领域标签，格式为：`标签1 | 标签2 | 标签3`。标签应简洁精准，反映视频内容所属的知识领域（如：科技、编程、投资、心理学、历史、商业 等）。",
+		"2. 在主标题和原视频直达链接之后，用「领域标签」作为二级标题，在该标题下用一行输出 1-3 个领域标签，格式为：`顶层领域 | 具体标签1 | 具体标签2`。第一个标签必须是有且只有一个顶层领域，优先从这些候选中选择，不要输出更细的子领域作为第一个标签：" + taxonomy.PromptChoices() + "。后续标签可写更具体的主题词。",
 		"3. 用「核心简介」作为二级标题，写一段约 150 字的文字，概括视频的核心价值以及它解决了什么问题。",
 		"4. 用「逻辑骨架」作为二级标题，使用 mermaid 的 graph TD 绘制一份逻辑图，清晰展示视频的主干流程。",
 		"5. 用「深度复盘」作为二级标题，按照视频逻辑模块继续使用 ## 二级标题分模块总结。每个模块以大段落深度叙事为主，拒绝过度细碎的 1.1.1/1.1.2 分点。若涉及并列关系或步骤，可以在段落内部适当用 1. 2. 或 * 做简短引导，但核心仍是深入的文字解释。",

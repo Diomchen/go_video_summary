@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"go_subtitle_whisper/internal/domain"
+	"go_subtitle_whisper/internal/taxonomy"
 )
 
 const (
@@ -23,20 +24,7 @@ func Base(task *domain.Task, timestamp time.Time) string {
 }
 
 func ClassificationCode(domainName string) string {
-	switch strings.TrimSpace(domainName) {
-	case "\u7ecf\u6d4e":
-		return "ECN"
-	case "\u4eba\u5de5\u667a\u80fd":
-		return "AIT"
-	case "", defaultDomain:
-		return "GEN"
-	default:
-		runes := []rune(domainName)
-		if len(runes) == 0 {
-			return "GEN"
-		}
-		return fmt.Sprintf("C%04X", runes[0])
-	}
+	return taxonomy.DomainCode(domainName)
 }
 
 func WithSuffix(task *domain.Task, timestamp time.Time, suffix string) string {

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"go_subtitle_whisper/internal/metadata"
+	"go_subtitle_whisper/internal/taxonomy"
 )
 
 type ObsidianIndex struct {
@@ -44,7 +45,7 @@ func (i *ObsidianIndex) Normalize(meta metadata.SummaryMetadata) (metadata.Summa
 		return meta, err
 	}
 
-	domain := normalizeBroadDomainStable(metadata.CleanLabel(meta.Domain))
+	domain := taxonomy.NormalizeDomain(metadata.CleanLabel(meta.Domain))
 	if domain == "" {
 		domain = "未分类"
 	}
@@ -191,36 +192,6 @@ func normalizeText(value string) string {
 	value = metadata.CleanLabel(strings.ToLower(strings.TrimSpace(value)))
 	replacer := strings.NewReplacer(" ", "", "\t", "", "-", "", "_", "")
 	return replacer.Replace(value)
-}
-
-func containsAny(value string, needles []string) bool {
-	for _, needle := range needles {
-		if strings.Contains(value, normalizeText(needle)) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeBroadDomainStable(value string) string {
-	normalized := normalizeText(value)
-	if normalized == "" {
-		return ""
-	}
-	if containsAny(normalized, []string{
-		"\u7ecf\u6d4e", "\u91d1\u878d", "\u8d22\u653f", "\u5b8f\u89c2", "\u5fae\u89c2",
-		"\u91cf\u5316\u7ecf\u6d4e", "\u7ecf\u6d4e\u5206\u6790", "\u7ecf\u6d4e\u65f6\u653f",
-	}) {
-		return "\u7ecf\u6d4e"
-	}
-	if containsAny(normalized, []string{
-		"\u4eba\u5de5\u667a\u80fd", "ai", "\u673a\u5668\u5b66\u4e60",
-		"\u6df1\u5ea6\u5b66\u4e60", "\u5f3a\u5316\u5b66\u4e60", "\u795e\u7ecf\u7f51\u7edc",
-		"\u5927\u6a21\u578b", "llm",
-	}) {
-		return "\u4eba\u5de5\u667a\u80fd"
-	}
-	return value
 }
 
 func levenshtein(a, b []rune) int {

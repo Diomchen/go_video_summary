@@ -1,8 +1,15 @@
 package llm
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"go_subtitle_whisper/internal/service"
 )
 
 func TestRewriteSummarySourceLinkPrefersCanonicalBVIDURL(t *testing.T) {
@@ -58,5 +65,44 @@ func TestRewriteSummarySourceLinkReplacesLiteralBVIDPlaceholder(t *testing.T) {
 	}
 	if !strings.Contains(got, "https://www.bilibili.com/video/BV1Ab411Q7xK") {
 		t.Fatalf("expected canonical BVID link, got: %s", got)
+	}
+}
+
+func TestSummarizePromptListsTopLevelDomainChoices(t *testing.T) {
+	var systemPrompt string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		for _, message := range body.Messages {
+			if message.Role == "system" {
+				systemPrompt = message.Content
+			}
+		}
+		writeChatResponse(t, w, `# T
+
+## 领域标签
+投资 | 短线交易
+
+body`)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "key", "model", 3*time.Second)
+	_, _, err := client.Summarize(context.Background(), "transcript", service.SummaryOptions{})
+	if err != nil {
+		t.Fatalf("Summarize() error = %v", err)
+	}
+
+	for _, want := range []string{"顶层领域", "投资", "人工智能", "经济"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("system prompt should contain %q, got:\n%s", want, systemPrompt)
+		}
 	}
 }
