@@ -9,18 +9,29 @@ import (
 )
 
 func buildMetadataMarkdownContent(task *domain.Task, markdown string, obsidianLinks bool) string {
+	title := firstNonEmpty(task.Title, task.Name)
+	upName := firstNonEmpty(task.UPName, task.AuthorName)
+	sourceLink := firstNonEmpty(task.SourceLink, task.SourceURL)
+	domainName := firstNonEmpty(task.Domain)
+	tags := task.Tags
+	if len(tags) == 0 {
+		tags = task.DomainTags
+	}
+
 	var b strings.Builder
 	b.WriteString("---\n")
-	if strings.TrimSpace(task.Name) != "" {
-		fmt.Fprintf(&b, "title: %q\n", task.Name)
+	if title != "" {
+		fmt.Fprintf(&b, "title: %q\n", title)
 	}
-	if strings.TrimSpace(task.AuthorName) != "" {
-		fmt.Fprintf(&b, "author: %q\n", task.AuthorName)
-		fmt.Fprintf(&b, "up: %q\n", task.AuthorName)
+	if upName != "" {
+		fmt.Fprintf(&b, "up_name: %q\n", upName)
+		fmt.Fprintf(&b, "author: %q\n", upName)
+		fmt.Fprintf(&b, "up: %q\n", upName)
 	}
-	if strings.TrimSpace(task.SourceURL) != "" {
-		fmt.Fprintf(&b, "source_url: %q\n", task.SourceURL)
-		if bvid := source.ExtractBVID(task.SourceURL); bvid != "" {
+	if sourceLink != "" {
+		fmt.Fprintf(&b, "source_link: %q\n", sourceLink)
+		fmt.Fprintf(&b, "source_url: %q\n", sourceLink)
+		if bvid := source.ExtractBVID(sourceLink); bvid != "" {
 			fmt.Fprintf(&b, "bvid: %q\n", bvid)
 		}
 	}
@@ -33,19 +44,23 @@ func buildMetadataMarkdownContent(task *domain.Task, markdown string, obsidianLi
 	if strings.TrimSpace(task.CollectionURL) != "" {
 		fmt.Fprintf(&b, "collection_url: %q\n", task.CollectionURL)
 	}
-	if len(task.DomainTags) > 0 {
-		b.WriteString("domain_tags:\n")
-		for _, tag := range task.DomainTags {
+	if domainName != "" {
+		fmt.Fprintf(&b, "domain: %q\n", domainName)
+	}
+	if len(tags) > 0 {
+		b.WriteString("tags:\n")
+		for _, tag := range tags {
 			if strings.TrimSpace(tag) != "" {
 				fmt.Fprintf(&b, "  - %q\n", tag)
 			}
 		}
 	}
-	tags := obsidianTags(task)
-	if len(tags) > 0 {
-		b.WriteString("tags:\n")
-		for _, tag := range tags {
-			fmt.Fprintf(&b, "  - %q\n", tag)
+	if len(task.DomainTags) > 0 && task.Domain == "" && len(task.Tags) == 0 {
+		b.WriteString("domain_tags:\n")
+		for _, tag := range task.DomainTags {
+			if strings.TrimSpace(tag) != "" {
+				fmt.Fprintf(&b, "  - %q\n", tag)
+			}
 		}
 	}
 	b.WriteString("---\n\n")
@@ -73,11 +88,15 @@ func obsidianTags(task *domain.Task) []string {
 	}
 
 	add("bilibili")
-	if task.AuthorName != "" {
-		add("up/" + task.AuthorName)
+	if upName := firstNonEmpty(task.UPName, task.AuthorName); upName != "" {
+		add("up/" + upName)
 	}
-	for _, tag := range task.DomainTags {
-		add("domain/" + tag)
+	if domainName := firstNonEmpty(task.Domain); domainName != "" {
+		add("domain/" + domainName)
+	} else {
+		for _, tag := range task.DomainTags {
+			add("domain/" + tag)
+		}
 	}
 	if task.CollectionName != "" {
 		add("collection/" + task.CollectionName)
@@ -87,10 +106,12 @@ func obsidianTags(task *domain.Task) []string {
 
 func buildObsidianRelations(task *domain.Task) string {
 	var lines []string
-	if strings.TrimSpace(task.AuthorName) != "" {
-		lines = append(lines, fmt.Sprintf("- UP主：[[UP/%s]]", task.AuthorName))
+	if upName := firstNonEmpty(task.UPName, task.AuthorName); upName != "" {
+		lines = append(lines, fmt.Sprintf("- UP主：[[UP/%s]]", upName))
 	}
-	if len(task.DomainTags) > 0 {
+	if domainName := firstNonEmpty(task.Domain); domainName != "" {
+		lines = append(lines, fmt.Sprintf("- 领域：[[%s]]", domainName))
+	} else if len(task.DomainTags) > 0 {
 		var links []string
 		for _, tag := range task.DomainTags {
 			if strings.TrimSpace(tag) != "" {
@@ -108,4 +129,13 @@ func buildObsidianRelations(task *domain.Task) string {
 		return ""
 	}
 	return "## 关联\n\n" + strings.Join(lines, "\n") + "\n\n"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

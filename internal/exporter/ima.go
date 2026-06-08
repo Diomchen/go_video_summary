@@ -105,11 +105,11 @@ func (e *IMAExporter) ExportMarkdown(ctx context.Context, task *domain.Task, _ s
 
 func buildIMAMetadataPrefix(task *domain.Task) string {
 	var lines []string
-	if task.AuthorName != "" {
-		lines = append(lines, "**UP主：** "+task.AuthorName)
+	if upName := firstNonEmpty(task.UPName, task.AuthorName); upName != "" {
+		lines = append(lines, "**UP主：** "+upName)
 	}
-	if task.SourceURL != "" {
-		lines = append(lines, fmt.Sprintf("**视频链接：** [%s](%s)", task.SourceURL, task.SourceURL))
+	if sourceLink := firstNonEmpty(task.SourceLink, task.SourceURL); sourceLink != "" {
+		lines = append(lines, fmt.Sprintf("**视频链接：** [%s](%s)", sourceLink, sourceLink))
 	}
 	if task.CollectionName != "" {
 		coll := task.CollectionName
@@ -121,8 +121,15 @@ func buildIMAMetadataPrefix(task *domain.Task) string {
 	if task.CollectionURL != "" {
 		lines = append(lines, fmt.Sprintf("**合集链接：** [%s](%s)", task.CollectionURL, task.CollectionURL))
 	}
-	if len(task.DomainTags) > 0 {
-		lines = append(lines, "**领域标签：** "+strings.Join(task.DomainTags, " | "))
+	if strings.TrimSpace(task.Domain) != "" {
+		lines = append(lines, "**领域：** "+task.Domain)
+	}
+	tags := task.Tags
+	if len(tags) == 0 {
+		tags = task.DomainTags
+	}
+	if len(tags) > 0 {
+		lines = append(lines, "**标签：** "+strings.Join(tags, " | "))
 	}
 	if len(lines) == 0 {
 		return ""

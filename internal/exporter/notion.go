@@ -40,7 +40,7 @@ func (e *NotionExporter) Name() string {
 }
 
 func (e *NotionExporter) ExportMarkdown(ctx context.Context, task *domain.Task, _ string, markdown string) (domain.ExportResult, error) {
-	title := strings.TrimSpace(task.Name)
+	title := firstNonEmpty(task.Title, task.Name)
 	if title == "" {
 		title = task.ID
 	}
@@ -163,11 +163,11 @@ func orderedListLine(line string) bool {
 
 func buildNotionMetadataBlocks(task *domain.Task) []map[string]any {
 	var lines []string
-	if task.AuthorName != "" {
-		lines = append(lines, "UP主："+task.AuthorName)
+	if upName := firstNonEmpty(task.UPName, task.AuthorName); upName != "" {
+		lines = append(lines, "UP主："+upName)
 	}
-	if task.SourceURL != "" {
-		lines = append(lines, "视频链接："+task.SourceURL)
+	if sourceLink := firstNonEmpty(task.SourceLink, task.SourceURL); sourceLink != "" {
+		lines = append(lines, "视频链接："+sourceLink)
 	}
 	if task.CollectionName != "" {
 		coll := task.CollectionName
@@ -179,8 +179,15 @@ func buildNotionMetadataBlocks(task *domain.Task) []map[string]any {
 	if task.CollectionURL != "" {
 		lines = append(lines, "合集链接："+task.CollectionURL)
 	}
-	if len(task.DomainTags) > 0 {
-		lines = append(lines, "领域标签："+strings.Join(task.DomainTags, " | "))
+	if strings.TrimSpace(task.Domain) != "" {
+		lines = append(lines, "领域："+task.Domain)
+	}
+	tags := task.Tags
+	if len(tags) == 0 {
+		tags = task.DomainTags
+	}
+	if len(tags) > 0 {
+		lines = append(lines, "标签："+strings.Join(tags, " | "))
 	}
 
 	if len(lines) == 0 {
@@ -189,8 +196,8 @@ func buildNotionMetadataBlocks(task *domain.Task) []map[string]any {
 
 	blocks := make([]map[string]any, 0, len(lines)+1)
 	blocks = append(blocks, map[string]any{
-		"object": "block",
-		"type":   "divider",
+		"object":  "block",
+		"type":    "divider",
 		"divider": map[string]any{},
 	})
 	for _, line := range lines {
@@ -208,8 +215,8 @@ func buildNotionMetadataBlocks(task *domain.Task) []map[string]any {
 		})
 	}
 	blocks = append(blocks, map[string]any{
-		"object": "block",
-		"type":   "divider",
+		"object":  "block",
+		"type":    "divider",
 		"divider": map[string]any{},
 	})
 	return blocks
