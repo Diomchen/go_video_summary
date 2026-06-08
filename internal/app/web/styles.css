@@ -217,7 +217,7 @@ textarea {
 
 .banner-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--space-2);
   padding: var(--space-4);
   border-bottom: 1px solid var(--line-soft);
@@ -238,6 +238,7 @@ textarea {
 
 .primary-link,
 .secondary-link,
+.primary-btn,
 .ghost-btn,
 .view-tab,
 .sub-tab,
@@ -291,6 +292,7 @@ textarea {
 }
 
 .secondary-link:hover,
+.primary-btn:hover,
 .ghost-btn:hover,
 .view-tab:hover,
 .sub-tab:hover,
@@ -380,6 +382,7 @@ textarea {
 .status-block,
 .submit-shell,
 .tasks-panel,
+.settings-panel,
 .api-panel {
   border-radius: var(--radius-md);
   background:
@@ -389,6 +392,7 @@ textarea {
 
 .status-block,
 .tasks-panel,
+.settings-panel,
 .api-panel {
   padding: var(--space-5);
   border: 1px solid var(--line-soft);
@@ -634,6 +638,96 @@ textarea {
   grid-template-columns: minmax(240px, 1.15fr) 1.5fr auto;
   align-items: end;
   margin-top: var(--space-title-action);
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--content-gap);
+  margin-top: var(--space-5);
+}
+
+.settings-section {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-5);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-soft);
+  background: var(--bg-elevated);
+}
+
+.settings-section-wide {
+  grid-column: 1 / -1;
+}
+
+.settings-list,
+.settings-editor {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.compact-settings-editor {
+  padding-top: var(--space-4);
+  border-top: 1px dashed var(--line-soft);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--content-gap);
+  min-width: 0;
+  padding: var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--bg-layer-3) 84%, transparent);
+}
+
+.settings-row.active {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line-soft));
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-elevated));
+}
+
+.settings-row strong,
+.settings-row span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.settings-row strong {
+  color: var(--text-heading);
+}
+
+.settings-row span {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.settings-row-actions,
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--action-gap);
+}
+
+.settings-actions {
+  margin-top: var(--space-2);
+}
+
+.settings-message {
+  min-height: 22px;
+  color: var(--ok);
+  font-size: 0.92rem;
+}
+
+.settings-message.error-text,
+.danger-btn {
+  color: var(--danger);
 }
 
 .task-search {
@@ -936,6 +1030,7 @@ code {
   .status-layout,
   .task-toolbar,
   .task-footer,
+  .settings-grid,
   .api-grid {
     grid-template-columns: 1fr;
   }
@@ -970,6 +1065,7 @@ code {
   .work-head,
   .form-panel,
   .tasks-panel,
+  .settings-panel,
   .api-panel {
     padding: var(--space-6) var(--space-5);
   }
@@ -1161,6 +1257,9 @@ code {
 @media (max-width: 560px) {
   .topbar-actions,
   .task-toolbar-actions,
+  .settings-row,
+  .settings-row-actions,
+  .settings-actions,
   .task-filter-group,
   .sub-tabs {
     display: grid;

@@ -27,6 +27,7 @@
           <button type="button" class="view-tab active" data-view="status">系统状态</button>
           <button type="button" class="view-tab" data-view="submit">任务提交</button>
           <button type="button" class="view-tab" data-view="tasks">任务列表</button>
+          <button type="button" class="view-tab" data-view="settings">配置</button>
           <button type="button" class="view-tab" data-view="api">接口文档</button>
         </header>
 
@@ -127,10 +128,6 @@
                           <span>Markdown 导出目录</span>
                           <input name="markdownExportDir" placeholder="例如：E:\notes\whisper">
                         </label>
-                        <label class="field">
-                          <span>Obsidian 导出目录</span>
-                          <input name="obsidianExportDir" placeholder="例如：E:\Obsidian\MyVault\B站转写">
-                        </label>
                       </div>
                     </fieldset>
 
@@ -186,10 +183,6 @@
                           <span>Markdown 导出目录</span>
                           <input name="markdownExportDir" placeholder="例如：E:\notes\whisper">
                         </label>
-                        <label class="field">
-                          <span>Obsidian 导出目录</span>
-                          <input name="obsidianExportDir" placeholder="例如：E:\Obsidian\MyVault\B站转写">
-                        </label>
                       </div>
                     </fieldset>
 
@@ -228,6 +221,131 @@
                 </div>
                 <div id="task-results-info" class="task-results-info"></div>
                 <div id="tasks" class="tasks"></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="banner-panel" data-panel="settings">
+            <div class="banner-panel-scroll">
+              <section class="settings-panel">
+                <div class="panel-head">
+                  <div>
+                    <p class="section-kicker">Runtime Settings</p>
+                    <h3>配置</h3>
+                  </div>
+                  <button type="button" class="ghost-btn compact-btn" id="settings-refresh">刷新配置</button>
+                </div>
+
+                <div class="settings-grid">
+                  <form class="settings-section" id="obsidian-settings-form">
+                    <div class="section-heading">
+                      <div>
+                        <p class="section-kicker">Obsidian</p>
+                        <h3>知识库根目录</h3>
+                      </div>
+                    </div>
+                    <div class="field-grid">
+                      <label class="field">
+                        <span>Vault 根目录</span>
+                        <input name="vaultDir" placeholder="例如：E:\Obsidian\MyVault">
+                      </label>
+                      <label class="field">
+                        <span>相似度阈值</span>
+                        <input name="similarityThreshold" type="number" min="0.1" max="1" step="0.01" placeholder="0.82">
+                      </label>
+                      <label class="field">
+                        <span>领域索引文件</span>
+                        <input name="domainIndexFile" placeholder="领域索引.md">
+                      </label>
+                      <label class="field">
+                        <span>tag 索引文件</span>
+                        <input name="tagIndexFile" placeholder="标签索引.md">
+                      </label>
+                    </div>
+                    <div class="settings-actions">
+                      <button type="submit" class="primary-btn">保存 Obsidian</button>
+                      <span class="settings-message" id="obsidian-settings-message"></span>
+                    </div>
+                  </form>
+
+                  <section class="settings-section">
+                    <div class="section-heading">
+                      <div>
+                        <p class="section-kicker">OpenAI Compatible</p>
+                        <h3>API 代理商</h3>
+                      </div>
+                    </div>
+                    <div id="provider-list" class="settings-list"></div>
+                    <form id="provider-form" class="settings-editor">
+                      <input type="hidden" name="id">
+                      <div class="field-grid">
+                        <label class="field">
+                          <span>名称</span>
+                          <input name="name" placeholder="OpenAI / OpenRouter / 自建代理">
+                        </label>
+                        <label class="field">
+                          <span>模型</span>
+                          <input name="model" placeholder="gpt-4o-mini">
+                        </label>
+                        <label class="field">
+                          <span>Base URL</span>
+                          <input name="baseURL" placeholder="https://api.openai.com">
+                        </label>
+                        <label class="field">
+                          <span>API Key</span>
+                          <input name="apiKey" type="password" placeholder="保存后会隐藏">
+                        </label>
+                      </div>
+                      <div class="settings-actions">
+                        <button type="submit" class="primary-btn">保存 Provider</button>
+                        <button type="button" class="ghost-btn" id="provider-form-reset">新建</button>
+                        <span class="settings-message" id="provider-settings-message"></span>
+                      </div>
+                    </form>
+                  </section>
+
+                  <section class="settings-section settings-section-wide">
+                    <div class="section-heading">
+                      <div>
+                        <p class="section-kicker">Prompt / Skill</p>
+                        <h3>总结提示词</h3>
+                      </div>
+                    </div>
+                    <div id="prompt-list" class="settings-list"></div>
+                    <form id="prompt-form" class="settings-editor">
+                      <input type="hidden" name="id">
+                      <div class="field-grid">
+                        <label class="field">
+                          <span>名称</span>
+                          <input name="name" placeholder="我的总结风格">
+                        </label>
+                        <label class="field">
+                          <span>类型</span>
+                          <input name="kind" placeholder="prompt / skill">
+                        </label>
+                      </div>
+                      <label class="field field-block">
+                        <span>内容</span>
+                        <textarea name="content" rows="10" placeholder="输入 prompt，或加载本地 SKILL.md"></textarea>
+                      </label>
+                      <div class="settings-actions">
+                        <button type="submit" class="primary-btn">保存 Prompt</button>
+                        <button type="button" class="ghost-btn" id="prompt-form-reset">新建</button>
+                        <span class="settings-message" id="prompt-settings-message"></span>
+                      </div>
+                    </form>
+                    <form id="prompt-load-form" class="settings-editor compact-settings-editor">
+                      <label class="field">
+                        <span>本地文件路径</span>
+                        <input name="path" placeholder="例如：E:\prompts\SKILL.md">
+                      </label>
+                      <div class="settings-actions">
+                        <button type="submit" class="ghost-btn">加载文件</button>
+                        <span class="settings-message" id="prompt-load-message"></span>
+                      </div>
+                    </form>
+                  </section>
+                </div>
               </section>
             </div>
           </section>

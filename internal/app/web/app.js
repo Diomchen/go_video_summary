@@ -9,7 +9,7 @@ const themeToggleEl = document.getElementById("theme-toggle");
 
 const tasks = new Map();
 const expandedTaskIds = new Set();
-const viewOrder = ["status", "submit", "tasks", "api"];
+const viewOrder = ["status", "submit", "tasks", "settings", "api"];
 
 const THEME_KEY = "whisper-console-theme";
 
@@ -19,6 +19,7 @@ let currentSearch = "";
 let currentView = "status";
 let bilibiliLoginPollTimer = null;
 let pendingAfterLogin = null;
+let settingsState = null;
 
 let currentPage = 1;
 const pageSize = 50;
@@ -763,14 +764,189 @@ async function handleCopyCurl(button) {
   }, 1600);
 }
 
+function showSettingsMessage(id, message, isError = false) {
+  const el = document.getElementById(id);
+  if (!el) {
+    return;
+  }
+  el.textContent = message;
+  el.classList.toggle("error-text", Boolean(isError));
+  if (message) {
+    window.setTimeout(() => {
+      el.textContent = "";
+      el.classList.remove("error-text");
+    }, 2400);
+  }
+}
+
+async function loadSettings() {
+  settingsState = await fetchJSON("/api/settings");
+  renderSettings();
+}
+
+async function saveSettings(nextSettings) {
+  settingsState = await fetchJSON("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(nextSettings)
+  });
+  renderSettings();
+}
+
+function renderSettings() {
+  if (!settingsState) {
+    return;
+  }
+  renderObsidianSettings();
+  renderProviderSettings();
+  renderPromptSettings();
+  if (currentView === "settings") {
+    window.requestAnimationFrame(updateStageHeight);
+  }
+}
+
+function renderObsidianSettings() {
+  const form = document.getElementById("obsidian-settings-form");
+  if (!form) {
+    return;
+  }
+  const obsidian = settingsState.obsidian || {};
+  form.elements.vaultDir.value = obsidian.vaultDir || "";
+  form.elements.similarityThreshold.value = obsidian.similarityThreshold || 0.82;
+  form.elements.domainIndexFile.value = obsidian.domainIndexFile || "领域索引.md";
+  form.elements.tagIndexFile.value = obsidian.tagIndexFile || "标签索引.md";
+}
+
+function renderProviderSettings() {
+  const list = document.getElementById("provider-list");
+  if (!list) {
+    return;
+  }
+  const llm = settingsState.llm || {};
+  const providers = llm.providers || [];
+  list.innerHTML = providers.length ? providers.map((provider) => {
+    const active = provider.id === llm.activeProviderID;
+    return `
+      <article class="settings-row ${active ? "active" : ""}">
+        <div>
+          <strong>${escapeHtml(provider.name || provider.id)}</strong>
+          <span>${escapeHtml(provider.model || "-")} · ${escapeHtml(provider.baseURL || "-")}</span>
+        </div>
+        <div class="settings-row-actions">
+          ${active ? '<span class="badge">Active</span>' : `<button type="button" class="ghost-btn compact-btn" data-settings-action="provider-activate" data-provider-id="${escapeHtml(provider.id)}">启用</button>`}
+          <button type="button" class="ghost-btn compact-btn" data-settings-action="provider-edit" data-provider-id="${escapeHtml(provider.id)}">编辑</button>
+          <button type="button" class="ghost-btn compact-btn" data-settings-action="provider-test" data-provider-id="${escapeHtml(provider.id)}">测试</button>
+          <button type="button" class="ghost-btn compact-btn danger-btn" data-settings-action="provider-delete" data-provider-id="${escapeHtml(provider.id)}">删除</button>
+        </div>
+      </article>
+    `;
+  }).join("") : '<p class="empty">还没有 API Provider。</p>';
+}
+
+function renderPromptSettings() {
+  const list = document.getElementById("prompt-list");
+  if (!list) {
+    return;
+  }
+  const prompts = settingsState.prompts || {};
+  const items = prompts.items || [];
+  list.innerHTML = items.length ? items.map((prompt) => {
+    const active = prompt.id === prompts.activePromptID;
+    return `
+      <article class="settings-row ${active ? "active" : ""}">
+        <div>
+          <strong>${escapeHtml(prompt.name || prompt.id)}</strong>
+          <span>${escapeHtml(prompt.kind || "prompt")}${prompt.sourcePath ? ` · ${escapeHtml(prompt.sourcePath)}` : ""}</span>
+        </div>
+        <div class="settings-row-actions">
+          ${active ? '<span class="badge">Active</span>' : `<button type="button" class="ghost-btn compact-btn" data-settings-action="prompt-activate" data-prompt-id="${escapeHtml(prompt.id)}">启用</button>`}
+          <button type="button" class="ghost-btn compact-btn" data-settings-action="prompt-edit" data-prompt-id="${escapeHtml(prompt.id)}">编辑</button>
+          <button type="button" class="ghost-btn compact-btn danger-btn" data-settings-action="prompt-delete" data-prompt-id="${escapeHtml(prompt.id)}">删除</button>
+        </div>
+      </article>
+    `;
+  }).join("") : '<p class="empty">还没有自定义 Prompt。</p>';
+}
+
+function resetProviderForm() {
+  const form = document.getElementById("provider-form");
+  if (form) {
+    form.reset();
+    form.elements.id.value = "";
+  }
+}
+
+function resetPromptForm() {
+  const form = document.getElementById("prompt-form");
+  if (form) {
+    form.reset();
+    form.elements.id.value = "";
+    form.elements.kind.value = "prompt";
+  }
+}
+
+function editProvider(id) {
+  const provider = ((settingsState.llm || {}).providers || []).find((item) => item.id === id);
+  const form = document.getElementById("provider-form");
+  if (!provider || !form) {
+    return;
+  }
+  form.elements.id.value = provider.id || "";
+  form.elements.name.value = provider.name || "";
+  form.elements.model.value = provider.model || "";
+  form.elements.baseURL.value = provider.baseURL || "";
+  form.elements.apiKey.value = provider.apiKey || "";
+  setView("settings");
+}
+
+function editPrompt(id) {
+  const prompt = ((settingsState.prompts || {}).items || []).find((item) => item.id === id);
+  const form = document.getElementById("prompt-form");
+  if (!prompt || !form) {
+    return;
+  }
+  form.elements.id.value = prompt.id || "";
+  form.elements.name.value = prompt.name || "";
+  form.elements.kind.value = prompt.kind || "prompt";
+  form.elements.content.value = prompt.content || "";
+  setView("settings");
+}
+
+async function activateProvider(id) {
+  settingsState = await fetchJSON(`/api/settings/providers/${encodeURIComponent(id)}/activate`, { method: "POST" });
+  renderSettings();
+}
+
+async function testProvider(id) {
+  await fetchJSON(`/api/settings/providers/${encodeURIComponent(id)}/test`, { method: "POST" });
+}
+
+async function deleteProvider(id) {
+  settingsState = await fetchJSON(`/api/settings/providers/${encodeURIComponent(id)}`, { method: "DELETE" });
+  renderSettings();
+}
+
+async function activatePrompt(id) {
+  settingsState = await fetchJSON(`/api/settings/prompts/${encodeURIComponent(id)}/activate`, { method: "POST" });
+  renderSettings();
+}
+
+async function deletePrompt(id) {
+  settingsState = await fetchJSON(`/api/settings/prompts/${encodeURIComponent(id)}`, { method: "DELETE" });
+  renderSettings();
+}
+
 async function loadInitial() {
-  const [health, data] = await Promise.all([
+  const [health, data, runtimeSettings] = await Promise.all([
     fetchJSON("/api/health"),
-    fetchJSON("/api/tasks?page=1&size=200")
+    fetchJSON("/api/tasks?page=1&size=200"),
+    fetchJSON("/api/settings")
   ]);
 
   healthState = health;
+  settingsState = runtimeSettings;
   renderHealth();
+  renderSettings();
   renderExportOptions("file-export-options");
   renderExportOptions("url-export-options");
   const list = Array.isArray(data) ? data : (data.tasks || []);
@@ -849,6 +1025,44 @@ function attachEvents() {
       return;
     }
 
+    const settingsButton = event.target.closest("[data-settings-action]");
+    if (settingsButton) {
+      const settingsAction = settingsButton.getAttribute("data-settings-action");
+      const providerId = settingsButton.getAttribute("data-provider-id");
+      const promptId = settingsButton.getAttribute("data-prompt-id");
+      try {
+        if (settingsAction === "provider-edit" && providerId) {
+          editProvider(providerId);
+        } else if (settingsAction === "provider-activate" && providerId) {
+          await activateProvider(providerId);
+          showSettingsMessage("provider-settings-message", "已启用");
+        } else if (settingsAction === "provider-test" && providerId) {
+          await testProvider(providerId);
+          showSettingsMessage("provider-settings-message", "测试通过");
+        } else if (settingsAction === "provider-delete" && providerId) {
+          await deleteProvider(providerId);
+          resetProviderForm();
+          showSettingsMessage("provider-settings-message", "已删除");
+        } else if (settingsAction === "prompt-edit" && promptId) {
+          editPrompt(promptId);
+        } else if (settingsAction === "prompt-activate" && promptId) {
+          await activatePrompt(promptId);
+          showSettingsMessage("prompt-settings-message", "已启用");
+        } else if (settingsAction === "prompt-delete" && promptId) {
+          await deletePrompt(promptId);
+          resetPromptForm();
+          showSettingsMessage("prompt-settings-message", "已删除");
+        }
+      } catch (err) {
+        showSettingsMessage(
+          providerId ? "provider-settings-message" : "prompt-settings-message",
+          err.message,
+          true
+        );
+      }
+      return;
+    }
+
     const actionButton = event.target.closest("[data-action]");
     if (!actionButton) {
       return;
@@ -899,6 +1113,107 @@ function attachEvents() {
     }
   });
 }
+
+document.getElementById("settings-refresh").addEventListener("click", async () => {
+  try {
+    await loadSettings();
+    showSettingsMessage("obsidian-settings-message", "已刷新");
+  } catch (err) {
+    showSettingsMessage("obsidian-settings-message", err.message, true);
+  }
+});
+
+document.getElementById("obsidian-settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const next = structuredClone(settingsState || {});
+  next.obsidian = {
+    ...(next.obsidian || {}),
+    vaultDir: form.elements.vaultDir.value.trim(),
+    domainIndexFile: form.elements.domainIndexFile.value.trim() || "领域索引.md",
+    tagIndexFile: form.elements.tagIndexFile.value.trim() || "标签索引.md",
+    similarityThreshold: Number(form.elements.similarityThreshold.value || 0.82)
+  };
+  try {
+    await saveSettings(next);
+    showSettingsMessage("obsidian-settings-message", "已保存");
+  } catch (err) {
+    showSettingsMessage("obsidian-settings-message", err.message, true);
+  }
+});
+
+document.getElementById("provider-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const id = form.elements.id.value.trim();
+  const payload = {
+    id,
+    name: form.elements.name.value.trim(),
+    baseURL: form.elements.baseURL.value.trim(),
+    apiKey: form.elements.apiKey.value.trim(),
+    model: form.elements.model.value.trim(),
+    enabled: true
+  };
+  try {
+    const url = id ? `/api/settings/providers/${encodeURIComponent(id)}` : "/api/settings/providers";
+    settingsState = await fetchJSON(url, {
+      method: id ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    renderSettings();
+    showSettingsMessage("provider-settings-message", "已保存");
+  } catch (err) {
+    showSettingsMessage("provider-settings-message", err.message, true);
+  }
+});
+
+document.getElementById("provider-form-reset").addEventListener("click", resetProviderForm);
+
+document.getElementById("prompt-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const id = form.elements.id.value.trim();
+  const payload = {
+    id,
+    name: form.elements.name.value.trim(),
+    kind: form.elements.kind.value.trim() || "prompt",
+    content: form.elements.content.value,
+    enabled: true
+  };
+  try {
+    const url = id ? `/api/settings/prompts/${encodeURIComponent(id)}` : "/api/settings/prompts";
+    settingsState = await fetchJSON(url, {
+      method: id ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    renderSettings();
+    showSettingsMessage("prompt-settings-message", "已保存");
+  } catch (err) {
+    showSettingsMessage("prompt-settings-message", err.message, true);
+  }
+});
+
+document.getElementById("prompt-form-reset").addEventListener("click", resetPromptForm);
+
+document.getElementById("prompt-load-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const path = form.elements.path.value.trim();
+  try {
+    settingsState = await fetchJSON("/api/settings/prompts/load-file", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path })
+    });
+    form.reset();
+    renderSettings();
+    showSettingsMessage("prompt-load-message", "已加载");
+  } catch (err) {
+    showSettingsMessage("prompt-load-message", err.message, true);
+  }
+});
 
 document.getElementById("file-form").addEventListener("submit", async (event) => {
   event.preventDefault();
