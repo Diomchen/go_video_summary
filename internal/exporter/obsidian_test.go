@@ -32,7 +32,8 @@ func TestBuildObsidianContentAddsGraphFriendlyTagsAndLinks(t *testing.T) {
 		`bvid: "BV1Ab411Q7xK"`,
 		"## 关联",
 		"- UP主：[[UP/测试UP]]",
-		"- 领域：[[领域/AI]] [[领域/深度学习]]",
+		"- 领域：[[AI]] [[深度学习]]",
+		"- 标签：[[AI]] [[深度学习]]",
 		"- 合集：[[合集/机器学习合集]]",
 		"正文内容",
 	} {
@@ -86,10 +87,10 @@ func TestObsidianExporterWritesByDomainAndUpdatesIndexes(t *testing.T) {
 
 	domainIndex := readText(t, filepath.Join(vault, "领域索引.md"))
 	tagIndex := readText(t, filepath.Join(vault, "标签索引.md"))
-	if !strings.Contains(domainIndex, "- 科技") {
+	if !strings.Contains(domainIndex, "- [[科技]]") {
 		t.Fatalf("domain index missing value: %s", domainIndex)
 	}
-	if !strings.Contains(tagIndex, "- OpenAI") || !strings.Contains(tagIndex, "- B站") {
+	if !strings.Contains(tagIndex, "- [[OpenAI]]") || !strings.Contains(tagIndex, "- [[B站]]") {
 		t.Fatalf("tag index missing values: %s", tagIndex)
 	}
 }
@@ -121,8 +122,11 @@ func TestObsidianExporterUsesReadableMetadataFilename(t *testing.T) {
 	if strings.Contains(filename, task.ID) {
 		t.Fatalf("filename = %q, should not contain task id %q", filename, task.ID)
 	}
-	if !regexp.MustCompile(`\d{8}-\d{6}\.md$`).MatchString(filename) {
-		t.Fatalf("filename = %q, want timestamped markdown filename", filename)
+	if !regexp.MustCompile(`^AIT-.*-\d{8}\.md$`).MatchString(filename) {
+		t.Fatalf("filename = %q, want library-coded date markdown filename", filename)
+	}
+	if regexp.MustCompile(`\d{8}-\d{6}`).MatchString(filename) {
+		t.Fatalf("filename = %q, should use date only", filename)
 	}
 }
 

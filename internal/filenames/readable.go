@@ -19,7 +19,24 @@ const (
 func Base(task *domain.Task, timestamp time.Time) string {
 	domainName := safePart(firstNonEmpty(taskDomain(task), defaultDomain), 24)
 	title := safePart(firstNonEmpty(taskTitle(task), defaultTitle), 72)
-	return strings.Join([]string{domainName, title, timestamp.Format("20060102-150405")}, "-")
+	return strings.Join([]string{ClassificationCode(domainName), domainName, title, timestamp.Format("20060102")}, "-")
+}
+
+func ClassificationCode(domainName string) string {
+	switch strings.TrimSpace(domainName) {
+	case "\u7ecf\u6d4e":
+		return "ECN"
+	case "\u4eba\u5de5\u667a\u80fd":
+		return "AIT"
+	case "", defaultDomain:
+		return "GEN"
+	default:
+		runes := []rune(domainName)
+		if len(runes) == 0 {
+			return "GEN"
+		}
+		return fmt.Sprintf("C%04X", runes[0])
+	}
 }
 
 func WithSuffix(task *domain.Task, timestamp time.Time, suffix string) string {

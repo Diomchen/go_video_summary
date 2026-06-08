@@ -35,7 +35,10 @@ func TestSaveTaskOutputsUsesReadableMetadataFilename(t *testing.T) {
 	if strings.Contains(filename, task.ID) {
 		t.Fatalf("filename = %q, should not contain task id %q", filename, task.ID)
 	}
-	if !regexp.MustCompile(`\d{8}-\d{6}\.summary\.md$`).MatchString(filename) {
-		t.Fatalf("filename = %q, want timestamped summary markdown filename", filename)
+	if !regexp.MustCompile(`^AIT-.*-\d{8}\.summary\.md$`).MatchString(filename) {
+		t.Fatalf("filename = %q, want library-coded date summary markdown filename", filename)
+	}
+	if regexp.MustCompile(`\d{8}-\d{6}`).MatchString(filename) {
+		t.Fatalf("filename = %q, should use date only", filename)
 	}
 }

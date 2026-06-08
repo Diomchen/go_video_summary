@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"go_subtitle_whisper/internal/domain"
 )
@@ -109,10 +110,27 @@ func sanitize(meta SummaryMetadata) SummaryMetadata {
 }
 
 func CleanLabel(value string) string {
-	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
-	value = strings.Trim(value, "#`'\" \t\r\n:：,，.。;；、|/\\[](){}<>《》“”‘’")
-	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
-	return value
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range value {
+		if unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			continue
+		}
+		if unicode.IsSpace(r) {
+			if !lastSpace {
+				b.WriteByte(' ')
+				lastSpace = true
+			}
+			continue
+		}
+		b.WriteRune(r)
+		lastSpace = false
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func cleanList(values []string) []string {

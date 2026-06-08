@@ -22,10 +22,10 @@ func TestNormalizeCreatesIndexesAndDomainFolderValue(t *testing.T) {
 	}
 	domainIndex := readFile(t, filepath.Join(vault, "领域索引.md"))
 	tagIndex := readFile(t, filepath.Join(vault, "标签索引.md"))
-	if !strings.Contains(domainIndex, "- 科技") {
+	if !strings.Contains(domainIndex, "- [[科技]]") {
 		t.Fatalf("domain index missing value: %s", domainIndex)
 	}
-	if !strings.Contains(tagIndex, "- OpenAI") || !strings.Contains(tagIndex, "- B站") {
+	if !strings.Contains(tagIndex, "- [[OpenAI]]") || !strings.Contains(tagIndex, "- [[B站]]") {
 		t.Fatalf("tag index missing values: %s", tagIndex)
 	}
 }

@@ -77,7 +77,10 @@ func TestMarkdownExporterUsesReadableMetadataFilename(t *testing.T) {
 	if strings.Contains(filename, task.ID) {
 		t.Fatalf("filename = %q, should not contain task id %q", filename, task.ID)
 	}
-	if !regexp.MustCompile(`\d{8}-\d{6}\.md$`).MatchString(filename) {
-		t.Fatalf("filename = %q, want timestamped markdown filename", filename)
+	if !regexp.MustCompile(`^AIT-.*-\d{8}\.md$`).MatchString(filename) {
+		t.Fatalf("filename = %q, want library-coded date markdown filename", filename)
+	}
+	if regexp.MustCompile(`\d{8}-\d{6}`).MatchString(filename) {
+		t.Fatalf("filename = %q, should use date only", filename)
 	}
 }

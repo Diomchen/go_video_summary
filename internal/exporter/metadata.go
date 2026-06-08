@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"go_subtitle_whisper/internal/domain"
+	"go_subtitle_whisper/internal/metadata"
 	"go_subtitle_whisper/internal/source"
 )
 
@@ -12,10 +13,10 @@ func buildMetadataMarkdownContent(task *domain.Task, markdown string, obsidianLi
 	title := firstNonEmpty(task.Title, task.Name)
 	upName := firstNonEmpty(task.UPName, task.AuthorName)
 	sourceLink := firstNonEmpty(task.SourceLink, task.SourceURL)
-	domainName := firstNonEmpty(task.Domain)
-	tags := task.Tags
+	domainName := metadata.CleanLabel(firstNonEmpty(task.Domain))
+	tags := cleanMetadataLabels(task.Tags)
 	if len(tags) == 0 {
-		tags = task.DomainTags
+		tags = cleanMetadataLabels(task.DomainTags)
 	}
 
 	var b strings.Builder
@@ -50,77 +51,69 @@ func buildMetadataMarkdownContent(task *domain.Task, markdown string, obsidianLi
 	if len(tags) > 0 {
 		b.WriteString("tags:\n")
 		for _, tag := range tags {
-			if strings.TrimSpace(tag) != "" {
-				fmt.Fprintf(&b, "  - %q\n", tag)
-			}
+			fmt.Fprintf(&b, "  - %q\n", tag)
 		}
 	}
 	if len(task.DomainTags) > 0 && task.Domain == "" && len(task.Tags) == 0 {
-		b.WriteString("domain_tags:\n")
-		for _, tag := range task.DomainTags {
-			if strings.TrimSpace(tag) != "" {
+		domainTags := cleanMetadataLabels(task.DomainTags)
+		if len(domainTags) > 0 {
+			b.WriteString("domain_tags:\n")
+			for _, tag := range domainTags {
 				fmt.Fprintf(&b, "  - %q\n", tag)
 			}
 		}
 	}
 	b.WriteString("---\n\n")
 	if obsidianLinks {
-		b.WriteString(buildObsidianRelations(task))
+		b.WriteString(buildObsidianRelationsV2(task))
 	}
 	b.WriteString(markdown)
 	return b.String()
 }
 
-func obsidianTags(task *domain.Task) []string {
-	var tags []string
+func cleanMetadataLabels(values []string) []string {
+	out := make([]string, 0, len(values))
 	seen := make(map[string]struct{})
-	add := func(tag string) {
-		tag = strings.Trim(strings.TrimSpace(tag), "#")
-		if tag == "" {
-			return
+	for _, value := range values {
+		value = metadata.CleanLabel(value)
+		if value == "" {
+			continue
 		}
-		tag = strings.ReplaceAll(tag, " ", "-")
-		if _, ok := seen[tag]; ok {
-			return
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
 		}
-		seen[tag] = struct{}{}
-		tags = append(tags, tag)
+		seen[key] = struct{}{}
+		out = append(out, value)
 	}
-
-	add("bilibili")
-	if upName := firstNonEmpty(task.UPName, task.AuthorName); upName != "" {
-		add("up/" + upName)
-	}
-	if domainName := firstNonEmpty(task.Domain); domainName != "" {
-		add("domain/" + domainName)
-	} else {
-		for _, tag := range task.DomainTags {
-			add("domain/" + tag)
-		}
-	}
-	if task.CollectionName != "" {
-		add("collection/" + task.CollectionName)
-	}
-	return tags
+	return out
 }
 
-func buildObsidianRelations(task *domain.Task) string {
+func buildObsidianRelationsV2(task *domain.Task) string {
 	var lines []string
 	if upName := firstNonEmpty(task.UPName, task.AuthorName); upName != "" {
 		lines = append(lines, fmt.Sprintf("- UP主：[[UP/%s]]", upName))
 	}
-	if domainName := firstNonEmpty(task.Domain); domainName != "" {
+	if domainName := metadata.CleanLabel(firstNonEmpty(task.Domain)); domainName != "" {
 		lines = append(lines, fmt.Sprintf("- 领域：[[%s]]", domainName))
-	} else if len(task.DomainTags) > 0 {
-		var links []string
-		for _, tag := range task.DomainTags {
-			if strings.TrimSpace(tag) != "" {
-				links = append(links, fmt.Sprintf("[[领域/%s]]", tag))
-			}
+	} else if domainTags := cleanMetadataLabels(task.DomainTags); len(domainTags) > 0 {
+		links := make([]string, 0, len(domainTags))
+		for _, tag := range domainTags {
+			links = append(links, fmt.Sprintf("[[%s]]", tag))
 		}
-		if len(links) > 0 {
-			lines = append(lines, "- 领域："+strings.Join(links, " "))
+		lines = append(lines, "- 领域："+strings.Join(links, " "))
+	}
+
+	tags := cleanMetadataLabels(task.Tags)
+	if len(tags) == 0 {
+		tags = cleanMetadataLabels(task.DomainTags)
+	}
+	if len(tags) > 0 {
+		links := make([]string, 0, len(tags))
+		for _, tag := range tags {
+			links = append(links, fmt.Sprintf("[[%s]]", tag))
 		}
+		lines = append(lines, "- 标签："+strings.Join(links, " "))
 	}
 	if strings.TrimSpace(task.CollectionName) != "" {
 		lines = append(lines, fmt.Sprintf("- 合集：[[合集/%s]]", task.CollectionName))
