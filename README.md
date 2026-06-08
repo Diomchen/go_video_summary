@@ -37,6 +37,7 @@
 
 ```env
 HTTP_ADDR=:18880
+RUNTIME_CONFIG_PATH=outputs/_config/runtime.json
 
 WHISPER_BACKEND=faster-whisper
 WHISPER_FASTER_URL=http://127.0.0.1:19000
@@ -69,7 +70,6 @@ NOTION_TOKEN=
 NOTION_PARENT_PAGE_ID=
 
 OBSIDIAN_VAULT_DIR=
-OBSIDIAN_SUBDIR=Whisper Imports
 
 IMA_OPENAPI_CLIENTID=
 IMA_OPENAPI_APIKEY=
@@ -90,10 +90,22 @@ IMA_OPENAPI_FOLDER_ID=
 - `CHUNK_PARALLELISM=2`：单任务内 chunk 并发数；faster-whisper 常驻 worker 下建议先从 `2` 开始试，再升到 `3`。
 - `BILIBILI_COOKIE_CACHE`：B 站扫码登录后 cookie 的本地缓存文件，用于解析稍后再看列表。
 - `BILIBILI_COOKIE_TTL=720h`：登录态缓存时长，默认 30 天；过期或接口返回未登录时会重新扫码。
+- `RUNTIME_CONFIG_PATH`：Web 配置页保存 Provider、Prompt 和 Obsidian 运行时设置的位置。`.env` 中的 LLM / Obsidian 配置会在首次启动时作为默认值写入运行时配置。
+- `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`：作为默认 OpenAI-compatible Provider；启动后可在 Web 页面的“配置”页新增、测试和切换 Provider。
 - `NOTION_PARENT_PAGE_ID`：当前实现为“在指定 Notion 页面下创建子页面”。
-- `OBSIDIAN_VAULT_DIR`：填写默认 Obsidian Vault 根目录；也可以在 Web 页面为单次任务手动填写 Obsidian 导出目录。
+- `OBSIDIAN_VAULT_DIR`：填写 Obsidian Vault 根目录；启动后可在 Web 页面的“配置”页维护。Obsidian 导出只需要根目录，系统会按领域自动创建一级文件夹。
 - `IMA_OPENAPI_CLIENTID` 和 `IMA_OPENAPI_APIKEY`：从 [IMA 开放接口页面](https://ima.qq.com/agent-interface) 获取。
 - `IMA_OPENAPI_FOLDER_ID`：建议默认留空。你已经验证过，把知识库文档目录对应的 `folder_id` 填进去会失败；当前推荐流程是先导入普通笔记，再在 IMA 里手动转存到知识库文档下。
+
+## 运行时配置
+
+Web 页面新增“配置”页，支持三类运行时设置：
+
+- Obsidian：只填写 Vault 根目录，默认维护 `领域索引.md` 和 `标签索引.md` 两个速查文件。
+- API Provider：支持 OpenAI-compatible 代理商，包含名称、Base URL、API Key 和模型；可测试连接并动态切换当前启用 Provider。
+- Prompt / Skill：可保存自定义 prompt，也可以加载本地 `SKILL.md`。后续总结和重试总结会使用当前启用的 prompt。
+
+运行时配置会保存到 `RUNTIME_CONFIG_PATH`，修改 Provider / Prompt / Obsidian 设置不需要重启服务。
 
 ## faster-whisper Worker
 
@@ -154,8 +166,7 @@ go run ./cmd/subtitle-whisper
   "translate": false,
   "summarize": true,
   "exportTargets": ["markdown", "obsidian"],
-  "markdownExportDir": "E:\\notes\\whisper",
-  "obsidianExportDir": "E:\\Obsidian\\MyVault\\B站转写"
+  "markdownExportDir": "E:\\notes\\whisper"
 }
 ```
 
@@ -184,10 +195,26 @@ Web 页面会在首次使用或登录态过期时弹出 B 站扫码登录框。�
 导出说明：
 
 - `markdownExportDir`：勾选 `markdown` 时，把总结 Markdown 写入指定普通文件夹。
-- `obsidianExportDir`：勾选 `obsidian` 时，本次任务优先写入该目录；为空时使用 `.env` 中的 `OBSIDIAN_VAULT_DIR` / `OBSIDIAN_SUBDIR`。
-- Obsidian 导出的 Markdown 会写入 `tags`、`domain_tags`、`up`、`bvid`、`collection` 等 frontmatter，并在正文开头增加 `[[UP/...]]`、`[[领域/...]]`、`[[合集/...]]` 形式的关系链接，方便关系图谱聚合。
+- Obsidian 导出只使用配置页中的 Vault 根目录。每篇总结有且只有一个顶层 `domain`，文件写入 `<vault>/<domain>/<title>.md`。
+- Vault 根目录会维护 `领域索引.md` 和 `标签索引.md`。新文档的领域和 tag 会与已有索引做相似度匹配，足够接近时复用已有名称，不接近时追加到索引。
+- Obsidian 导出的 Markdown 会写入 `title`、`source_link`、`up_name`、`domain`、`tags`、`bvid`、`collection` 等 frontmatter；tag 不创建文件夹。
 
-### 3. 查询任务
+### 3. 运行时配置
+
+- `GET /api/settings`
+- `PUT /api/settings`
+- `POST /api/settings/providers`
+- `PUT /api/settings/providers/{id}`
+- `DELETE /api/settings/providers/{id}`
+- `POST /api/settings/providers/{id}/activate`
+- `POST /api/settings/providers/{id}/test`
+- `POST /api/settings/prompts`
+- `PUT /api/settings/prompts/{id}`
+- `DELETE /api/settings/prompts/{id}`
+- `POST /api/settings/prompts/{id}/activate`
+- `POST /api/settings/prompts/load-file`
+
+### 4. 查询任务
 
 - `GET /api/tasks`
 - `GET /api/tasks/{id}`
@@ -209,7 +236,7 @@ Web 页面会在首次使用或登录态过期时弹出 B 站扫码登录框。�
 }
 ```
 
-### 4. 重试总结
+### 5. 重试总结
 
 当转写成功但总结失败时，可调用：
 
