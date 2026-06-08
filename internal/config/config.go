@@ -45,6 +45,7 @@ type Config struct {
 	IMAOpenAPIClientID  string
 	IMAOpenAPIAPIKey    string
 	IMAOpenAPIFolderID  string
+	RuntimeConfigPath   string
 }
 
 func LoadFromEnv() Config {
@@ -85,6 +86,7 @@ func LoadFromEnv() Config {
 		IMAOpenAPIClientID:  os.Getenv("IMA_OPENAPI_CLIENTID"),
 		IMAOpenAPIAPIKey:    os.Getenv("IMA_OPENAPI_APIKEY"),
 		IMAOpenAPIFolderID:  os.Getenv("IMA_OPENAPI_FOLDER_ID"),
+		RuntimeConfigPath:   getEnv("RUNTIME_CONFIG_PATH", filepath.Join("outputs", "_config", "runtime.json")),
 	}
 }
 
