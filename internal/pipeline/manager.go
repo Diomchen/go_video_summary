@@ -17,6 +17,7 @@ import (
 	"go_subtitle_whisper/internal/audio"
 	"go_subtitle_whisper/internal/domain"
 	"go_subtitle_whisper/internal/exporter"
+	"go_subtitle_whisper/internal/metadata"
 	"go_subtitle_whisper/internal/service"
 	"go_subtitle_whisper/internal/source"
 )
@@ -402,6 +403,8 @@ func cloneTask(task *domain.Task) domain.Task {
 	cloned.SavedFiles = append([]string(nil), task.SavedFiles...)
 	cloned.ExportTargets = append([]string(nil), task.ExportTargets...)
 	cloned.Exports = append([]domain.ExportResult(nil), task.Exports...)
+	cloned.DomainTags = append([]string(nil), task.DomainTags...)
+	cloned.Tags = append([]string(nil), task.Tags...)
 	if task.Metrics != nil {
 		metrics := *task.Metrics
 		cloned.Metrics = &metrics
@@ -502,6 +505,11 @@ func ToTaskSummary(task *domain.Task) domain.TaskSummary {
 		domainTags = make([]string, len(task.DomainTags))
 		copy(domainTags, task.DomainTags)
 	}
+	var tags []string
+	if task.Tags != nil {
+		tags = make([]string, len(task.Tags))
+		copy(tags, task.Tags)
+	}
 	var metrics *domain.TaskMetrics
 	if task.Metrics != nil {
 		m := *task.Metrics
@@ -533,6 +541,11 @@ func ToTaskSummary(task *domain.Task) domain.TaskSummary {
 		Metrics:           metrics,
 		SummaryError:      task.SummaryError,
 		PendingSummary:    task.PendingSummary,
+		Title:             task.Title,
+		SourceLink:        task.SourceLink,
+		UPName:            task.UPName,
+		Domain:            task.Domain,
+		Tags:              tags,
 		CollectionName:    task.CollectionName,
 		CollectionURL:     task.CollectionURL,
 		CollectionIndex:   task.CollectionIndex,
@@ -896,7 +909,7 @@ func (m *Manager) runSummaryPipeline(ctx context.Context, id string) {
 	}
 
 	startedAt := time.Now()
-	summary, domainTags, err := m.summarizer.Summarize(ctx, sourceText, service.SummaryOptions{
+	summary, summaryMeta, err := m.summarizer.Summarize(ctx, sourceText, service.SummaryOptions{
 		Title:           task.Name,
 		SourceURL:       task.SourceURL,
 		BVID:            source.ExtractBVID(task.SourceURL),
@@ -912,18 +925,21 @@ func (m *Manager) runSummaryPipeline(ctx context.Context, id string) {
 		m.failSummary(id, task.Transcript, task.TranslatedText, err)
 		return
 	}
+	summaryMeta = metadata.MergeTaskFallbacks(summaryMeta, task)
+	if strings.TrimSpace(summaryMeta.Domain) == "" {
+		summaryMeta.Domain = "未分类"
+	}
 
 	m.completeTask(id, task.Transcript, task.TranslatedText, summary)
-	if len(domainTags) > 0 {
-		m.updateTask(id, func(task *domain.Task) {
-			task.DomainTags = domainTags
-			task.PendingSummary = false
-		})
-	} else {
-		m.updateTask(id, func(task *domain.Task) {
-			task.PendingSummary = false
-		})
-	}
+	m.updateTask(id, func(task *domain.Task) {
+		task.Title = summaryMeta.Title
+		task.SourceLink = summaryMeta.SourceLink
+		task.UPName = summaryMeta.UPName
+		task.Domain = summaryMeta.Domain
+		task.Tags = append([]string(nil), summaryMeta.Tags...)
+		task.DomainTags = nil
+		task.PendingSummary = false
+	})
 	m.setTaskProgress(id, "saving", 100)
 	if err := m.autoSaveOutputs(ctx, id); err != nil {
 		m.failSummary(id, task.Transcript, task.TranslatedText, err)

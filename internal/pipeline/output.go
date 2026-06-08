@@ -51,7 +51,15 @@ func saveTaskOutputs(task *domain.Task, outputDir string, saveAll bool) ([]strin
 func buildLocalSummaryContent(task *domain.Task) string {
 	var hasMeta bool
 	check := func(s string) bool { return strings.TrimSpace(s) != "" }
-	if check(task.AuthorName) || check(task.SourceURL) || check(task.CollectionName) || len(task.DomainTags) > 0 {
+	title := firstNonEmpty(task.Title, task.Name)
+	sourceLink := firstNonEmpty(task.SourceLink, task.SourceURL)
+	upName := firstNonEmpty(task.UPName, task.AuthorName)
+	domain := firstNonEmpty(task.Domain)
+	tags := task.Tags
+	if len(tags) == 0 {
+		tags = task.DomainTags
+	}
+	if check(title) || check(upName) || check(sourceLink) || check(task.CollectionName) || check(domain) || len(tags) > 0 {
 		hasMeta = true
 	}
 	if !hasMeta {
@@ -60,14 +68,16 @@ func buildLocalSummaryContent(task *domain.Task) string {
 
 	var b strings.Builder
 	b.WriteString("---\n")
-	if check(task.Name) {
-		fmt.Fprintf(&b, "title: %q\n", task.Name)
+	if check(title) {
+		fmt.Fprintf(&b, "title: %q\n", title)
 	}
-	if check(task.AuthorName) {
-		fmt.Fprintf(&b, "author: %q\n", task.AuthorName)
+	if check(upName) {
+		fmt.Fprintf(&b, "up_name: %q\n", upName)
+		fmt.Fprintf(&b, "author: %q\n", upName)
 	}
-	if check(task.SourceURL) {
-		fmt.Fprintf(&b, "source_url: %q\n", task.SourceURL)
+	if check(sourceLink) {
+		fmt.Fprintf(&b, "source_link: %q\n", sourceLink)
+		fmt.Fprintf(&b, "source_url: %q\n", sourceLink)
 	}
 	if check(task.CollectionName) {
 		fmt.Fprintf(&b, "collection: %q\n", task.CollectionName)
@@ -78,15 +88,27 @@ func buildLocalSummaryContent(task *domain.Task) string {
 	if check(task.CollectionURL) {
 		fmt.Fprintf(&b, "collection_url: %q\n", task.CollectionURL)
 	}
-	if len(task.DomainTags) > 0 {
-		b.WriteString("domain_tags:\n")
-		for _, tag := range task.DomainTags {
+	if check(domain) {
+		fmt.Fprintf(&b, "domain: %q\n", domain)
+	}
+	if len(tags) > 0 {
+		b.WriteString("tags:\n")
+		for _, tag := range tags {
 			fmt.Fprintf(&b, "  - %q\n", tag)
 		}
 	}
 	b.WriteString("---\n\n")
 	b.WriteString(task.Summary)
 	return b.String()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func slugify(value string) string {
