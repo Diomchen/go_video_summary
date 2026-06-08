@@ -596,7 +596,6 @@ func (m *Manager) failTask(id string, err error) {
 	})
 	m.markTaskFinished(id, finishedAt)
 	m.publishTask(id)
-	m.cleanupCheckpointArtifacts(id)
 }
 
 func (m *Manager) failSummary(id, transcript, translated string, err error) {
@@ -743,6 +742,52 @@ func (m *Manager) RetryExports(id string, targets []string) (*domain.Task, error
 		m.cleanupExpiredArtifacts(24 * time.Hour)
 	}()
 
+	updated, _ := m.GetTask(id)
+	return updated, nil
+}
+
+func (m *Manager) RetryTask(id string) (*domain.Task, error) {
+	task, ok := m.GetTask(id)
+	if !ok {
+		return nil, fmt.Errorf("task %s not found", id)
+	}
+	if task.Status != domain.TaskFailed {
+		return nil, fmt.Errorf("task %s is not failed", id)
+	}
+	if task.SummaryError != "" && strings.TrimSpace(task.Transcript) != "" {
+		m.updateTask(id, func(task *domain.Task) {
+			task.SummaryRequested = true
+			task.Status = domain.TaskRunning
+			task.Stage = "pending_summary"
+			task.ProgressPercent = 100
+			task.Error = ""
+			task.SummaryError = ""
+		})
+		m.publishTask(id)
+		m.enqueueSummary(id)
+		updated, _ := m.GetTask(id)
+		return updated, nil
+	}
+	if strings.TrimSpace(task.InputFilePath) == "" {
+		return nil, fmt.Errorf("task %s has no input file to retry", id)
+	}
+	if _, err := os.Stat(task.InputFilePath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("task %s input file no longer exists", id)
+		}
+		return nil, err
+	}
+
+	m.updateTask(id, func(task *domain.Task) {
+		task.Status = domain.TaskQueued
+		task.Stage = "queued"
+		task.ProgressPercent = 0
+		task.Error = ""
+		task.SummaryError = ""
+		task.PendingSummary = false
+	})
+	m.publishTask(id)
+	m.enqueueProcess(id)
 	updated, _ := m.GetTask(id)
 	return updated, nil
 }
@@ -964,8 +1009,8 @@ func (m *Manager) cleanupInputFile(id string) error {
 	return nil
 }
 
-// cleanupCheckpointArtifacts removes intermediate files from the checkpoint directory
-// after a task completes or fails. Keeps task.json, transcript.txt, and segments.json.
+// cleanupCheckpointArtifacts removes derived intermediates while keeping the
+// original input file so failed tasks can be retried.
 func (m *Manager) cleanupCheckpointArtifacts(id string) {
 	task, ok := m.GetTask(id)
 	if !ok || strings.TrimSpace(task.CheckpointDir) == "" {
@@ -973,19 +1018,12 @@ func (m *Manager) cleanupCheckpointArtifacts(id string) {
 	}
 	dir := task.CheckpointDir
 
-	// Remove converted WAV and original audio files
-	for _, name := range []string{"input.standard.wav", "input.m4a", "input.mp3", "input.mp4"} {
+	for _, name := range []string{"input.standard.wav"} {
 		path := filepath.Join(dir, name)
 		_ = os.Remove(path)
 	}
 
-	// Remove chunks directory (per-chunk WAV files and checkpoint JSONs)
 	_ = os.RemoveAll(filepath.Join(dir, "chunks"))
-
-	// Clear the input file path reference
-	m.updateTask(id, func(task *domain.Task) {
-		task.InputFilePath = ""
-	})
 }
 
 func (m *Manager) autoSaveOutputs(ctx context.Context, id string) error {

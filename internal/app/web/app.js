@@ -621,6 +621,11 @@ function renderTask(task) {
           `}
         </div>
         <div class="task-head-actions">
+          ${task.status === "failed" ? `
+            <button class="ghost-btn" data-action="retry-task" data-task-id="${escapeHtml(task.id)}">
+              &#37325;&#35797;&#20219;&#21153;
+            </button>
+          ` : ""}
           ${isExpanded ? taskSummaryActions(task) : ""}
           <button type="button" class="task-toggle" data-action="toggle-task" data-task-id="${escapeHtml(task.id)}">
             ${isExpanded ? "收起" : "展开"}
@@ -691,6 +696,16 @@ function rerender() {
 async function retrySummary(taskId) {
   try {
     const task = await fetchJSON(`/api/tasks/${encodeURIComponent(taskId)}/retry-summary`, { method: "POST" });
+    upsertTask(task);
+    rerender();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function retryTask(taskId) {
+  try {
+    const task = await fetchJSON(`/api/tasks/${encodeURIComponent(taskId)}/retry`, { method: "POST" });
     upsertTask(task);
     rerender();
   } catch (err) {
@@ -1102,6 +1117,11 @@ function attachEvents() {
 
     if (action === "retry-summary") {
       await retrySummary(taskId);
+      return;
+    }
+
+    if (action === "retry-task") {
+      await retryTask(taskId);
       return;
     }
 

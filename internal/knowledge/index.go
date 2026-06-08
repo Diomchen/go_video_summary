@@ -44,7 +44,7 @@ func (i *ObsidianIndex) Normalize(meta metadata.SummaryMetadata) (metadata.Summa
 		return meta, err
 	}
 
-	domain := strings.TrimSpace(meta.Domain)
+	domain := metadata.CleanLabel(meta.Domain)
 	if domain == "" {
 		domain = "未分类"
 	}
@@ -63,7 +63,7 @@ func (i *ObsidianIndex) Normalize(meta metadata.SummaryMetadata) (metadata.Summa
 	}
 	normalizedTags := make([]string, 0, len(meta.Tags))
 	for _, tag := range meta.Tags {
-		tag = strings.TrimSpace(strings.Trim(tag, "#"))
+		tag = metadata.CleanLabel(tag)
 		if tag == "" {
 			continue
 		}

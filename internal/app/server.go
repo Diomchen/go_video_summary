@@ -393,6 +393,20 @@ func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, task)
 		return
 	}
+	if strings.HasSuffix(id, "/retry") {
+		id = strings.TrimSuffix(id, "/retry")
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		task, err := s.manager.RetryTask(id)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, task)
+		return
+	}
 	if strings.HasSuffix(id, "/retry-exports") {
 		id = strings.TrimSuffix(id, "/retry-exports")
 		if r.Method != http.MethodPost {

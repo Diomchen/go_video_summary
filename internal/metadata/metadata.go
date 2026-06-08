@@ -17,8 +17,8 @@ type SummaryMetadata struct {
 }
 
 var (
-	commentPattern      = regexp.MustCompile(`(?s)^\s*<!--\s*metadata\s*(\{.*?\})\s*-->\s*`)
-	firstHeadingPattern = regexp.MustCompile(`(?m)^#\s+(.+)$`)
+	commentPattern       = regexp.MustCompile(`(?s)^\s*<!--\s*metadata\s*(\{.*?\})\s*-->\s*`)
+	firstHeadingPattern  = regexp.MustCompile(`(?m)^#\s+(.+)$`)
 	domainHeadingPattern = regexp.MustCompile(`(?m)^##\s*领域标签\s*\r?\n\s*(.+)$`)
 )
 
@@ -86,7 +86,7 @@ func splitPiped(value string) []string {
 	out := make([]string, 0, len(raw))
 	seen := make(map[string]struct{})
 	for _, item := range raw {
-		item = strings.TrimSpace(strings.Trim(item, "#"))
+		item = CleanLabel(item)
 		if item == "" {
 			continue
 		}
@@ -103,16 +103,23 @@ func sanitize(meta SummaryMetadata) SummaryMetadata {
 	meta.Title = strings.TrimSpace(meta.Title)
 	meta.SourceLink = strings.TrimSpace(meta.SourceLink)
 	meta.UPName = strings.TrimSpace(meta.UPName)
-	meta.Domain = strings.TrimSpace(meta.Domain)
+	meta.Domain = CleanLabel(meta.Domain)
 	meta.Tags = cleanList(meta.Tags)
 	return meta
+}
+
+func CleanLabel(value string) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	value = strings.Trim(value, "#`'\" \t\r\n:：,，.。;；、|/\\[](){}<>《》“”‘’")
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	return value
 }
 
 func cleanList(values []string) []string {
 	out := make([]string, 0, len(values))
 	seen := make(map[string]struct{})
 	for _, value := range values {
-		value = strings.TrimSpace(strings.Trim(value, "#"))
+		value = CleanLabel(value)
 		if value == "" {
 			continue
 		}
