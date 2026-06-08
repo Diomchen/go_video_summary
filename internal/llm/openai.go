@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"go_subtitle_whisper/internal/metadata"
 	"go_subtitle_whisper/internal/service"
 	"go_subtitle_whisper/internal/source"
 )
@@ -44,9 +45,9 @@ func (c *Client) Translate(ctx context.Context, input, sourceLanguage string) (s
 	return c.chat(ctx, system, input)
 }
 
-func (c *Client) Summarize(ctx context.Context, transcript string, options service.SummaryOptions) (string, []string, error) {
+func (c *Client) Summarize(ctx context.Context, transcript string, options service.SummaryOptions) (string, metadata.SummaryMetadata, error) {
 	if strings.TrimSpace(transcript) == "" {
-		return "", nil, nil
+		return "", metadata.SummaryMetadata{}, nil
 	}
 
 	system := strings.Join([]string{
@@ -104,13 +105,17 @@ func (c *Client) Summarize(ctx context.Context, transcript string, options servi
 	prompt.WriteString("\n待处理字幕内容如下：\n")
 	prompt.WriteString(transcript)
 
+	if strings.TrimSpace(options.PromptOverride) != "" {
+		system = strings.TrimSpace(options.PromptOverride)
+	}
+
 	result, err := c.chat(ctx, system, prompt.String())
 	if err != nil {
-		return "", nil, err
+		return "", metadata.SummaryMetadata{}, err
 	}
 	result = rewriteSummarySourceLink(result, options.SourceURL, options.BVID)
-	domainTags := extractDomainTags(result)
-	return result, domainTags, nil
+	clean, meta := metadata.ExtractFromSummary(result)
+	return clean, meta, nil
 }
 
 var (

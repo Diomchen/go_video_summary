@@ -30,6 +30,7 @@ type SummaryOptions struct {
 	CollectionName  string
 	CollectionIndex int
 	AuthorName      string
+	PromptOverride  string
 }
 
 type Summarizer interface {
