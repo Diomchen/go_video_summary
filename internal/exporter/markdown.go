@@ -2,12 +2,13 @@ package exporter
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"go_subtitle_whisper/internal/domain"
+	"go_subtitle_whisper/internal/filenames"
 )
 
 type MarkdownFolderExporter struct {
@@ -25,15 +26,12 @@ func (e *MarkdownFolderExporter) Name() string {
 	return "markdown"
 }
 
-func (e *MarkdownFolderExporter) ExportMarkdown(_ context.Context, task *domain.Task, markdownPath string, markdown string) (domain.ExportResult, error) {
+func (e *MarkdownFolderExporter) ExportMarkdown(_ context.Context, task *domain.Task, _ string, markdown string) (domain.ExportResult, error) {
 	if err := os.MkdirAll(e.dir, 0o755); err != nil {
 		return domain.ExportResult{Name: e.Name(), Status: "failed"}, err
 	}
-	filename := filepath.Base(markdownPath)
-	if strings.TrimSpace(filename) == "" || filename == "." {
-		filename = fmt.Sprintf("%s.summary.md", safeSlug(task.Name))
-	}
-	target := filepath.Join(e.dir, filename)
+	target := filepath.Join(e.dir, filenames.WithSuffix(task, time.Now(), ".md"))
+	target = filenames.UniquePath(target)
 	content := buildPortableMarkdownContent(task, markdown)
 	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
 		return domain.ExportResult{Name: e.Name(), Status: "failed"}, err

@@ -2,12 +2,13 @@ package exporter
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"go_subtitle_whisper/internal/domain"
+	"go_subtitle_whisper/internal/filenames"
 	"go_subtitle_whisper/internal/knowledge"
 	metapkg "go_subtitle_whisper/internal/metadata"
 )
@@ -54,7 +55,7 @@ func (e *ObsidianExporter) Name() string {
 	return "obsidian"
 }
 
-func (e *ObsidianExporter) ExportMarkdown(_ context.Context, task *domain.Task, markdownPath string, markdown string) (domain.ExportResult, error) {
+func (e *ObsidianExporter) ExportMarkdown(_ context.Context, task *domain.Task, _ string, markdown string) (domain.ExportResult, error) {
 	rootDir := e.vaultDir
 	if strings.TrimSpace(e.subdir) != "" {
 		rootDir = filepath.Join(rootDir, e.subdir)
@@ -80,21 +81,13 @@ func (e *ObsidianExporter) ExportMarkdown(_ context.Context, task *domain.Task, 
 	exportTask.Tags = append([]string(nil), normalized.Tags...)
 	exportTask.DomainTags = nil
 
-	targetDir := filepath.Join(rootDir, safePathPart(exportTask.Domain))
+	targetDir := filepath.Join(rootDir, filenames.SafeDir(exportTask.Domain))
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return domain.ExportResult{Name: e.Name(), Status: "failed"}, err
 	}
 
-	filename := filepath.Base(markdownPath)
-	if strings.TrimSpace(filename) == "" || filename == "." {
-		filename = safePathPart(firstNonEmpty(exportTask.Title, exportTask.Name))
-		if filename == "" {
-			filename = fmt.Sprintf("%s.summary", safeSlug(exportTask.Name))
-		}
-		filename += ".md"
-	}
-	target := filepath.Join(targetDir, filename)
-	target = uniquePath(target)
+	target := filepath.Join(targetDir, filenames.WithSuffix(exportTask, time.Now(), ".md"))
+	target = filenames.UniquePath(target)
 
 	content := buildObsidianContent(exportTask, markdown)
 	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
@@ -115,40 +108,4 @@ func cloneExportTask(task *domain.Task) *domain.Task {
 	cloned.DomainTags = append([]string(nil), task.DomainTags...)
 	cloned.Tags = append([]string(nil), task.Tags...)
 	return &cloned
-}
-
-func safePathPart(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	replacer := strings.NewReplacer(
-		"<", " ", ">", " ", ":", " ", `"`, " ", "/", " ", "\\", " ",
-		"|", " ", "?", " ", "*", " ", "\r", " ", "\n", " ", "\t", " ",
-	)
-	value = replacer.Replace(value)
-	value = strings.Join(strings.Fields(value), " ")
-	value = strings.Trim(value, ". ")
-	if value == "" {
-		return ""
-	}
-	if len([]rune(value)) > 80 {
-		runes := []rune(value)
-		value = string(runes[:80])
-	}
-	return value
-}
-
-func uniquePath(path string) string {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return path
-	}
-	ext := filepath.Ext(path)
-	base := strings.TrimSuffix(path, ext)
-	for idx := 2; ; idx++ {
-		candidate := fmt.Sprintf("%s-%d%s", base, idx, ext)
-		if _, err := os.Stat(candidate); os.IsNotExist(err) {
-			return candidate
-		}
-	}
 }

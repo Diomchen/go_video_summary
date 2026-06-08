@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go_subtitle_whisper/internal/domain"
+	"go_subtitle_whisper/internal/filenames"
 )
 
 func saveTaskOutputs(task *domain.Task, outputDir string, saveAll bool) ([]string, string, error) {
@@ -18,26 +19,26 @@ func saveTaskOutputs(task *domain.Task, outputDir string, saveAll bool) ([]strin
 		return nil, "", err
 	}
 
-	base := fmt.Sprintf("%s-%s-%s", task.ID, slugify(task.Name), time.Now().Format("20060102-150405"))
+	base := filenames.Base(task, time.Now())
 	var saved []string
 	summaryPath := ""
 
 	if saveAll && strings.TrimSpace(task.Transcript) != "" {
-		path := filepath.Join(outputDir, base+".transcript.txt")
+		path := filenames.UniquePath(filepath.Join(outputDir, base+".transcript.txt"))
 		if err := os.WriteFile(path, []byte(task.Transcript), 0o644); err != nil {
 			return saved, summaryPath, err
 		}
 		saved = append(saved, path)
 	}
 	if saveAll && strings.TrimSpace(task.TranslatedText) != "" {
-		path := filepath.Join(outputDir, base+".translated.txt")
+		path := filenames.UniquePath(filepath.Join(outputDir, base+".translated.txt"))
 		if err := os.WriteFile(path, []byte(task.TranslatedText), 0o644); err != nil {
 			return saved, summaryPath, err
 		}
 		saved = append(saved, path)
 	}
 	if strings.TrimSpace(task.Summary) != "" {
-		summaryPath = filepath.Join(outputDir, base+".summary.md")
+		summaryPath = filenames.UniquePath(filepath.Join(outputDir, base+".summary.md"))
 		summaryContent := buildLocalSummaryContent(task)
 		if err := os.WriteFile(summaryPath, []byte(summaryContent), 0o644); err != nil {
 			return saved, summaryPath, err
@@ -109,29 +110,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func slugify(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" {
-		return "task"
-	}
-	var b strings.Builder
-	lastDash := false
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	out := strings.Trim(b.String(), "-")
-	if out == "" {
-		return "task"
-	}
-	return out
 }

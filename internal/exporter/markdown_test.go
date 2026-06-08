@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -46,5 +47,37 @@ func TestMarkdownExporterWritesSummaryToConfiguredDirectory(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected exported markdown to contain %q, got:\n%s", want, text)
 		}
+	}
+}
+
+func TestMarkdownExporterUsesReadableMetadataFilename(t *testing.T) {
+	targetDir := t.TempDir()
+	domainName := "\u4eba\u5de5\u667a\u80fd"
+	title := "\u673a\u5668\u5b66\u4e60\u8def\u7ebf\u56fe"
+	task := &domain.Task{
+		ID:      "task123",
+		Name:    "fallback-name",
+		Title:   title,
+		Domain:  domainName,
+		Summary: "# Summary\n\nContent",
+	}
+	sourcePath := filepath.Join(t.TempDir(), "task123-fallback-name-20260101-010203.summary.md")
+
+	result, err := NewMarkdownFolderExporter(targetDir).ExportMarkdown(context.Background(), task, sourcePath, task.Summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	filename := filepath.Base(result.Target)
+	for _, want := range []string{domainName, title} {
+		if !strings.Contains(filename, want) {
+			t.Fatalf("filename = %q, want it to contain %q", filename, want)
+		}
+	}
+	if strings.Contains(filename, task.ID) {
+		t.Fatalf("filename = %q, should not contain task id %q", filename, task.ID)
+	}
+	if !regexp.MustCompile(`\d{8}-\d{6}\.md$`).MatchString(filename) {
+		t.Fatalf("filename = %q, want timestamped markdown filename", filename)
 	}
 }
