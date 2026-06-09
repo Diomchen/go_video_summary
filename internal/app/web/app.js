@@ -63,11 +63,25 @@ function formatDurationMs(value) {
   return `${minutes}m ${remainSeconds.toFixed(remainSeconds >= 10 ? 0 : 1)}s`;
 }
 
+function hasExplicitBilibiliPage(url) {
+  try {
+    const parsed = new URL(url.includes("://") ? url : `https://${url}`);
+    return parsed.searchParams.has("p");
+  } catch {
+    return /\?[^\s#]*\bp=/.test(url);
+  }
+}
+
+function isBilibiliVideoURL(url) {
+  return /bilibili\.com\/video\/BV[a-zA-Z0-9]+\/?(?:\?.*)?$/.test(url);
+}
+
 function isCollectionURL(url) {
   return /space\.bilibili\.com\/\d+\/lists\/\d+/.test(url)
     || /bilibili\.com\/medialist\/play\/\d+/.test(url)
     || /bilibili\.com\/playlist\/pl\d+/.test(url)
-    || /bilibili\.com\/watchlater(?:\/list)?/.test(url);
+    || /bilibili\.com\/watchlater(?:\/list)?/.test(url)
+    || (isBilibiliVideoURL(url) && !hasExplicitBilibiliPage(url));
 }
 
 function isWatchLaterURL(url) {

@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,13 @@ type BilibiliCollectionVideo struct {
 	BVID    string
 	Title   string
 	PageURL string
+}
+
+type BilibiliPage struct {
+	Cid      int64  `json:"cid"`
+	Page     int    `json:"page"`
+	Part     string `json:"part"`
+	Duration int    `json:"duration"`
 }
 
 type BilibiliCollection struct {
@@ -95,17 +103,22 @@ func (c *BilibiliClient) Resolve(ctx context.Context, rawURL string) (*BilibiliM
 		title = path.Base(strings.TrimRight(pageURL, "/"))
 	}
 
-	// Try inline __playinfo__ first (legacy pages).
-	playInfo, inlineErr := extractPlayInfo(content)
-	if inlineErr == nil {
-		audioURL := selectBestAudio(playInfo)
-		if audioURL != "" {
-			return &BilibiliMedia{
-				Title:    title,
-				PageURL:  pageURL,
-				AudioURL: audioURL,
-				Ext:      extFromURL(audioURL),
-			}, nil
+	// Try inline __playinfo__ first (legacy pages). For explicit ?p=N links,
+	// resolve cid from pages below so multi-part videos do not fall back to P1.
+	var playInfo *playInfoResponse
+	if _, hasSelectedPage := selectedPageNumber(pageURL); !hasSelectedPage {
+		var inlineErr error
+		playInfo, inlineErr = extractPlayInfo(content)
+		if inlineErr == nil {
+			audioURL := selectBestAudio(playInfo)
+			if audioURL != "" {
+				return &BilibiliMedia{
+					Title:    title,
+					PageURL:  pageURL,
+					AudioURL: audioURL,
+					Ext:      extFromURL(audioURL),
+				}, nil
+			}
 		}
 	}
 
@@ -265,6 +278,8 @@ var (
 // extractBvidCid extracts the video's bvid and cid from __INITIAL_STATE__ in the page HTML.
 // Falls back to extracting bvid from the URL and calling the bilibili API for cid.
 func extractBvidCid(content, pageURL string) (string, string, error) {
+	selectedPage, hasSelectedPage := selectedPageNumber(pageURL)
+
 	// Try extracting from __INITIAL_STATE__ JSON.
 	loc := initialStatePrefix.FindStringIndex(content)
 	if loc != nil {
@@ -291,14 +306,28 @@ func extractBvidCid(content, pageURL string) (string, string, error) {
 				raw := content[start : end+1]
 				var state struct {
 					VideoData struct {
-						Bvid string `json:"bvid"`
-						Aid  int64  `json:"aid"`
-						Cid  int64  `json:"cid"`
+						Bvid  string         `json:"bvid"`
+						Aid   int64          `json:"aid"`
+						Cid   int64          `json:"cid"`
+						Pages []BilibiliPage `json:"pages"`
 					} `json:"videoData"`
 				}
 				if json.Unmarshal([]byte(raw), &state) == nil {
-					if state.VideoData.Bvid != "" && state.VideoData.Cid > 0 {
-						return state.VideoData.Bvid, fmt.Sprintf("%d", state.VideoData.Cid), nil
+					bvid := state.VideoData.Bvid
+					if bvid == "" {
+						bvid = ExtractBVID(pageURL)
+					}
+					if hasSelectedPage {
+						for _, page := range state.VideoData.Pages {
+							if page.Page == selectedPage && page.Cid > 0 {
+								return bvid, fmt.Sprintf("%d", page.Cid), nil
+							}
+						}
+						if selectedPage == 1 && bvid != "" && state.VideoData.Cid > 0 {
+							return bvid, fmt.Sprintf("%d", state.VideoData.Cid), nil
+						}
+					} else if bvid != "" && state.VideoData.Cid > 0 {
+						return bvid, fmt.Sprintf("%d", state.VideoData.Cid), nil
 					}
 				}
 			}
@@ -310,14 +339,14 @@ func extractBvidCid(content, pageURL string) (string, string, error) {
 	if bvid == "" {
 		return "", "", fmt.Errorf("cannot extract bvid from bilibili page")
 	}
-	cid, err := fetchCidFromAPI(bvid)
+	cid, err := fetchCidFromAPI(bvid, selectedPage)
 	if err != nil {
 		return "", "", fmt.Errorf("get cid for %s: %w", bvid, err)
 	}
 	return bvid, cid, nil
 }
 
-func fetchCidFromAPI(bvid string) (string, error) {
+func fetchCidFromAPI(bvid string, selectedPage int) (string, error) {
 	apiURL := fmt.Sprintf("https://api.bilibili.com/x/web-interface/view?bvid=%s", bvid)
 	resp, err := http.Get(apiURL)
 	if err != nil {
@@ -331,7 +360,8 @@ func fetchCidFromAPI(bvid string) (string, error) {
 	var result struct {
 		Code int `json:"code"`
 		Data struct {
-			Cid int64 `json:"cid"`
+			Cid   int64          `json:"cid"`
+			Pages []BilibiliPage `json:"pages"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -340,10 +370,34 @@ func fetchCidFromAPI(bvid string) (string, error) {
 	if result.Code != 0 {
 		return "", fmt.Errorf("bilibili view API error: code=%d", result.Code)
 	}
+	if selectedPage > 0 {
+		for _, page := range result.Data.Pages {
+			if page.Page == selectedPage && page.Cid > 0 {
+				return fmt.Sprintf("%d", page.Cid), nil
+			}
+		}
+		return "", fmt.Errorf("no cid found for bvid %s page %d", bvid, selectedPage)
+	}
 	if result.Data.Cid == 0 {
 		return "", fmt.Errorf("no cid found for bvid %s", bvid)
 	}
 	return fmt.Sprintf("%d", result.Data.Cid), nil
+}
+
+func selectedPageNumber(pageURL string) (int, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(pageURL))
+	if err != nil {
+		return 0, false
+	}
+	rawPage := strings.TrimSpace(parsed.Query().Get("p"))
+	if rawPage == "" {
+		return 0, false
+	}
+	page, err := strconv.Atoi(rawPage)
+	if err != nil || page < 1 {
+		return 0, false
+	}
+	return page, true
 }
 
 func extractPlayInfo(content string) (*playInfoResponse, error) {
@@ -394,7 +448,7 @@ func extractHTMLTitle(content string) string {
 	return strings.TrimSpace(title)
 }
 
-func normalizeBilibiliURL(rawURL string) (string, error) {
+var normalizeBilibiliURL = func(rawURL string) (string, error) {
 	value := strings.TrimSpace(rawURL)
 	if value == "" {
 		return "", fmt.Errorf("empty bilibili url")
@@ -467,6 +521,34 @@ func IsCollectionURL(rawURL string) bool {
 		}
 	}
 	return false
+}
+
+// IsMultiPartVideo checks if a URL is a multi-part video URL (without ?p=N parameter).
+// These URLs should be resolved to check if they have multiple pages.
+func IsMultiPartVideo(rawURL string) bool {
+	value := strings.TrimSpace(rawURL)
+	if value == "" {
+		return false
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Host)
+	if !strings.Contains(host, "bilibili.com") {
+		return false
+	}
+	if !strings.Contains(parsed.Path, "/video/") {
+		return false
+	}
+	if IsCollectionURL(value) {
+		return false
+	}
+	// If ?p= is specified, user wants a specific page
+	if parsed.Query().Has("p") {
+		return false
+	}
+	return true
 }
 
 func extractCollectionIDs(rawURL string) (mid string, seasonID string) {
@@ -601,6 +683,137 @@ func (c *BilibiliClient) ResolveCollection(ctx context.Context, rawURL string) (
 		URL:    rawURL,
 		Author: authorName,
 		Videos: allVideos,
+	}, nil
+}
+
+// extractInitialStateJSON extracts the __INITIAL_STATE__ JSON object from page HTML.
+func extractInitialStateJSON(content string) (map[string]any, error) {
+	loc := initialStatePrefix.FindStringIndex(content)
+	if loc == nil {
+		return nil, fmt.Errorf("cannot find __INITIAL_STATE__ in page")
+	}
+	openIdx := strings.Index(content[loc[0]:], "{")
+	if openIdx < 0 {
+		return nil, fmt.Errorf("cannot find __INITIAL_STATE__ JSON")
+	}
+	start := loc[0] + openIdx
+	depth := 0
+	end := -1
+	for i := start; i < len(content); i++ {
+		switch content[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				end = i
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 {
+		return nil, fmt.Errorf("cannot find __INITIAL_STATE__ JSON: unbalanced braces")
+	}
+	raw := content[start : end+1]
+	var state map[string]any
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		return nil, fmt.Errorf("parse __INITIAL_STATE__: %w", err)
+	}
+	return state, nil
+}
+
+// ResolveMultiPart resolves a multi-part video URL and returns all pages as a collection.
+// Returns nil if the video has only one page.
+func (c *BilibiliClient) ResolveMultiPart(ctx context.Context, rawURL string) (*BilibiliCollection, error) {
+	pageURL, err := normalizeBilibiliURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("Referer", "https://www.bilibili.com/")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("bilibili page request failed: %s %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	content := string(body)
+
+	state, err := extractInitialStateJSON(content)
+	if err != nil {
+		return nil, err
+	}
+
+	videoData, ok := state["videoData"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("no videoData in __INITIAL_STATE__")
+	}
+
+	pagesRaw, ok := videoData["pages"].([]any)
+	if !ok || len(pagesRaw) <= 1 {
+		return nil, nil // Not a multi-part video
+	}
+
+	bvid, _ := videoData["bvid"].(string)
+	if bvid == "" {
+		bvid = ExtractBVID(pageURL)
+	}
+	title, _ := videoData["title"].(string)
+	authorName := ""
+	if owner, ok := videoData["owner"].(map[string]any); ok {
+		authorName, _ = owner["name"].(string)
+	}
+
+	videos := make([]BilibiliCollectionVideo, 0, len(pagesRaw))
+	for _, pageRaw := range pagesRaw {
+		page, ok := pageRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		pageNum, _ := page["page"].(float64)
+		part, _ := page["part"].(string)
+		if part == "" {
+			part = fmt.Sprintf("P%d", int(pageNum))
+		}
+		pageURL := fmt.Sprintf("https://www.bilibili.com/video/%s/?p=%d", bvid, int(pageNum))
+		videos = append(videos, BilibiliCollectionVideo{
+			BVID:    bvid,
+			Title:   part,
+			PageURL: pageURL,
+		})
+	}
+
+	if len(videos) == 0 {
+		return nil, nil
+	}
+
+	collectionName := title
+	if collectionName == "" {
+		collectionName = fmt.Sprintf("%s (多P合集)", bvid)
+	}
+
+	return &BilibiliCollection{
+		Name:   collectionName,
+		URL:    pageURL,
+		Author: authorName,
+		Videos: videos,
 	}, nil
 }
 

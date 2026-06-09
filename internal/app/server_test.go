@@ -92,3 +92,37 @@ func TestSettingsRoutesLoadSaveAndTestProvider(t *testing.T) {
 		t.Fatalf("expected provider test request")
 	}
 }
+
+func TestCollectionPreviewRejectsExplicitVideoPageWithoutSeasonLookup(t *testing.T) {
+	dir := t.TempDir()
+	server, err := NewServer(config.Config{
+		WhisperBackend:    "local",
+		WhisperLocalBin:   "whisper",
+		WhisperLocalModel: "model.bin",
+		RuntimeConfigPath: filepath.Join(dir, "runtime.json"),
+		OutputDir:         filepath.Join(dir, "outputs"),
+		CheckpointDir:     filepath.Join(dir, "checkpoints"),
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	body := strings.NewReader(`{"url":"https://www.bilibili.com/video/BV114411Q7Y4/?p=20"}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/collection-preview", body)
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/collection-preview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if strings.Contains(got["error"], "season id") {
+		t.Fatalf("explicit page URL should not be parsed as a collection: %q", got["error"])
+	}
+	if !strings.Contains(got["error"], "not a collection") {
+		t.Fatalf("expected not-a-collection error, got %q", got["error"])
+	}
+}

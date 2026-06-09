@@ -180,6 +180,16 @@ func (m *Manager) CreateURLTasksFromInput(name, rawURL, language string, transla
 	if source.IsCollectionURL(rawURL) {
 		return m.CreateCollectionTasks(rawURL, language, translate, summarize, exportOptions)
 	}
+	if source.IsMultiPartVideo(rawURL) {
+		tasks, err := m.CreateMultiPartTasks(rawURL, language, translate, summarize, exportOptions)
+		if err != nil {
+			return nil, err
+		}
+		if tasks != nil {
+			return tasks, nil
+		}
+		// Not actually multi-part, fall through to single task
+	}
 	return []*domain.Task{m.CreateURLTask(name, rawURL, language, translate, summarize, exportOptions)}, nil
 }
 
@@ -223,6 +233,65 @@ func (m *Manager) CreateCollectionTasks(rawURL, language string, translate, summ
 		tasks = append(tasks, task)
 	}
 	return tasks, nil
+}
+
+func (m *Manager) CreateMultiPartTasks(rawURL, language string, translate, summarize bool, exportOptions ExportOptions) ([]*domain.Task, error) {
+	if m.bilibili == nil {
+		return nil, fmt.Errorf("bilibili resolver is not configured")
+	}
+	collection, err := m.bilibili.ResolveMultiPart(context.Background(), rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if collection == nil {
+		return nil, nil
+	}
+
+	tasks := make([]*domain.Task, 0, len(collection.Videos))
+	for i, video := range collection.Videos {
+		task := m.CreateURLTaskWithMeta(
+			video.Title,
+			video.PageURL,
+			language,
+			translate,
+			summarize,
+			exportOptions,
+			collection.Name,
+			collection.URL,
+			collection.Author,
+			i+1, // 1-based index
+		)
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
+func (m *Manager) MultiPartPreview(ctx context.Context, rawURL string) (*CollectionPreviewResponse, error) {
+	if m.bilibili == nil {
+		return nil, fmt.Errorf("bilibili resolver is not configured")
+	}
+	collection, err := m.bilibili.ResolveMultiPart(ctx, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if collection == nil {
+		return nil, fmt.Errorf("not a multi-part video")
+	}
+	videos := make([]CollectionPreviewVideo, len(collection.Videos))
+	for i, v := range collection.Videos {
+		videos[i] = CollectionPreviewVideo{
+			BVID:    v.BVID,
+			Title:   v.Title,
+			PageURL: v.PageURL,
+			Index:   i + 1,
+		}
+	}
+	return &CollectionPreviewResponse{
+		Name:   collection.Name,
+		URL:    collection.URL,
+		Author: collection.Author,
+		Videos: videos,
+	}, nil
 }
 
 type CollectionPreviewResponse struct {

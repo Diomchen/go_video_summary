@@ -314,6 +314,26 @@ func (s *Server) handleCollectionPreview(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Try multi-part video preview first
+	if source.IsMultiPartVideo(req.URL) {
+		collection, err := s.manager.MultiPartPreview(r.Context(), req.URL)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if collection != nil {
+			writeJSON(w, http.StatusOK, collection)
+			return
+		}
+		writeError(w, http.StatusBadRequest, errors.New("url is not a collection or multi-part video"))
+		return
+	}
+
+	if !source.IsCollectionURL(req.URL) {
+		writeError(w, http.StatusBadRequest, errors.New("url is not a collection or multi-part video"))
+		return
+	}
+
 	collection, err := s.manager.CollectionPreview(r.Context(), req.URL)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
