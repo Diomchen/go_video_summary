@@ -166,6 +166,9 @@ func normalizeSettings(settings RuntimeSettings) RuntimeSettings {
 	}
 	for idx := range settings.LLM.Providers {
 		settings.LLM.Providers[idx].BaseURL = trimTrailingSlash(settings.LLM.Providers[idx].BaseURL)
+		if settings.LLM.ActiveProviderID != "" && settings.LLM.Providers[idx].ID == settings.LLM.ActiveProviderID {
+			settings.LLM.Providers[idx].Enabled = true
+		}
 	}
 	if settings.LLM.ActiveProviderID == "" {
 		for _, provider := range settings.LLM.Providers {

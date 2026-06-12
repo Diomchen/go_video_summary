@@ -126,3 +126,56 @@ func TestCollectionPreviewRejectsExplicitVideoPageWithoutSeasonLookup(t *testing
 		t.Fatalf("expected not-a-collection error, got %q", got["error"])
 	}
 }
+
+func TestProviderActivationEnablesSelectedProvider(t *testing.T) {
+	dir := t.TempDir()
+	server, err := NewServer(config.Config{
+		WhisperBackend:    "local",
+		WhisperLocalBin:   "whisper",
+		WhisperLocalModel: "model.bin",
+		LLMBaseURL:        "https://default.example.com",
+		LLMAPIKey:         "default-secret",
+		LLMModel:          "default-model",
+		RuntimeConfigPath: filepath.Join(dir, "runtime.json"),
+		OutputDir:         filepath.Join(dir, "outputs"),
+		CheckpointDir:     filepath.Join(dir, "checkpoints"),
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	current, err := server.settingsStore.Load()
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	current.LLM.Providers = append(current.LLM.Providers, settings.Provider{
+		ID:      "custom",
+		Name:    "Custom",
+		BaseURL: "https://custom.example.com",
+		APIKey:  "custom-secret",
+		Model:   "custom-model",
+		Enabled: false,
+	})
+	if err := server.settingsStore.Save(current); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/providers/custom/activate", nil)
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("activate provider status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	reloaded, err := server.settingsStore.Load()
+	if err != nil {
+		t.Fatalf("reload settings: %v", err)
+	}
+	provider, ok := reloaded.ActiveProvider()
+	if !ok {
+		t.Fatalf("expected active provider")
+	}
+	if provider.ID != "custom" || !provider.Enabled {
+		t.Fatalf("activation should enable and select custom provider, got %+v", provider)
+	}
+}

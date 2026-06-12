@@ -822,6 +822,38 @@ async function saveSettings(nextSettings) {
   renderSettings();
 }
 
+function buildURLTaskPayload(form, urlsText) {
+  const formData = new FormData(form);
+  return {
+    name: formData.get("name") || "",
+    language: formData.get("language") || "",
+    urlsText: urlsText ?? formData.get("urlsText") ?? "",
+    translate: formData.get("translate") === "on",
+    summarize: formData.get("summarize") === "on",
+    exportTargets: selectedExportTargets(form),
+    ...exportPathOptions(form)
+  };
+}
+
+async function submitURLTasks(form, urlsText) {
+  const payload = buildURLTaskPayload(form, urlsText);
+  const created = await fetchJSON("/api/url-tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  (Array.isArray(created) ? created : [created]).forEach((task) => upsertTask(task));
+  form.reset();
+  setView("tasks");
+  rerender();
+}
+
+function isNotCollectionPreviewError(error) {
+  const message = error?.message || "";
+  return /not a collection or multi-part video/i.test(message)
+    || /not a multi-part video/i.test(message);
+}
+
 function renderSettings() {
   if (!settingsState) {
     return;
@@ -1279,26 +1311,8 @@ document.getElementById("url-form").addEventListener("submit", async (event) => 
     return;
   }
 
-  const payload = {
-    name: formData.get("name") || "",
-    language: formData.get("language") || "",
-    urlsText: urlsText,
-    translate: formData.get("translate") === "on",
-    summarize: formData.get("summarize") === "on",
-    exportTargets: selectedExportTargets(form),
-    ...exportPathOptions(form)
-  };
-
   try {
-    const created = await fetchJSON("/api/url-tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    (Array.isArray(created) ? created : [created]).forEach((task) => upsertTask(task));
-    form.reset();
-    setView("tasks");
-    rerender();
+    await submitURLTasks(form, urlsText);
   } catch (err) {
     alert(err.message);
   }
@@ -1330,6 +1344,14 @@ async function previewCollection(url, form) {
     if (isWatchLaterURL(url) && /code=-101|未登录|login/i.test(err.message || "")) {
       pendingAfterLogin = () => previewCollection(url, form);
       await openBilibiliLoginModal();
+      return;
+    }
+    if (isNotCollectionPreviewError(err)) {
+      try {
+        await submitURLTasks(form);
+      } catch (submitErr) {
+        alert(submitErr.message);
+      }
       return;
     }
     alert("合集解析失败: " + err.message);

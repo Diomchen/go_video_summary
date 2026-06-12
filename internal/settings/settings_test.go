@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -75,5 +76,33 @@ func TestPublicCopyMasksAPIKeys(t *testing.T) {
 	public := settings.PublicCopy()
 	if public.LLM.Providers[0].APIKey != "********" {
 		t.Fatalf("API key was not masked: %q", public.LLM.Providers[0].APIKey)
+	}
+}
+
+func TestLoadTreatsActiveProviderAsEnabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.json")
+	store := NewStore(path, config.Config{})
+	if err := os.WriteFile(path, []byte(`{
+  "llm": {
+    "activeProviderID": "custom",
+    "providers": [
+      {"id":"env-default","name":"Env Default","baseURL":"https://default.example.com","model":"default","enabled":true},
+      {"id":"custom","name":"Custom","baseURL":"https://custom.example.com","model":"custom","enabled":false}
+    ]
+  }
+}`), 0o644); err != nil {
+		t.Fatalf("write old settings file: %v", err)
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	provider, ok := loaded.ActiveProvider()
+	if !ok {
+		t.Fatalf("expected active provider")
+	}
+	if provider.ID != "custom" || !provider.Enabled {
+		t.Fatalf("expected active provider to be enabled and selected, got %+v", provider)
 	}
 }

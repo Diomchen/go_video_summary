@@ -589,11 +589,9 @@ func (s *Server) handleSettingsProviderByID(w http.ResponseWriter, r *http.Reque
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		updated, err := s.settingsStore.Update(func(current *settings.RuntimeSettings) {
-			current.LLM.ActiveProviderID = id
-		})
+		updated, err := s.activateProvider(id)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusNotFound, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, updated.PublicCopy())
@@ -872,6 +870,29 @@ func (s *Server) updateProvider(id string, provider settings.Provider) (settings
 	for idx := range current.LLM.Providers {
 		if current.LLM.Providers[idx].ID == id {
 			current.LLM.Providers[idx] = provider
+			found = true
+			break
+		}
+	}
+	if !found {
+		return settings.RuntimeSettings{}, fmt.Errorf("provider %s not found", id)
+	}
+	if err := s.settingsStore.Save(current); err != nil {
+		return settings.RuntimeSettings{}, err
+	}
+	return s.settingsStore.Load()
+}
+
+func (s *Server) activateProvider(id string) (settings.RuntimeSettings, error) {
+	current, err := s.settingsStore.Load()
+	if err != nil {
+		return settings.RuntimeSettings{}, err
+	}
+	found := false
+	for idx := range current.LLM.Providers {
+		if current.LLM.Providers[idx].ID == id {
+			current.LLM.Providers[idx].Enabled = true
+			current.LLM.ActiveProviderID = id
 			found = true
 			break
 		}
